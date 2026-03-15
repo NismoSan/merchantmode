@@ -59,7 +59,12 @@
       "Bash(do ls:*)",
       "Bash(echo \"FOUND: $f\")",
       "Bash(echo \"MISSING: $f\")",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(npx electron-builder:*)",
+      "Bash(taskkill //IM \"Merchant Mode.exe\" //F)",
+      "Bash(git push:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Third\\AEofficial\\public\\items"
