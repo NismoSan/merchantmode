@@ -202,10 +202,22 @@ export class MerchantEngine extends EventEmitter {
       if (listing.status !== 'ACTIVE') continue;
       if (listing.quantityRemaining <= 0) continue;
 
-      if (lower.includes(listing.itemName.toLowerCase())) {
+      // For TRADE listings, match on the WANTED item name (what the whisperer has).
+      // For BUY/SELL, match on itemName as before.
+      const matchName = listing.type === 'TRADE'
+        ? listing.wantedItems?.[0]?.name
+        : listing.itemName;
+      if (!matchName) continue;
+
+      if (lower.includes(matchName.toLowerCase())) {
+        // For TRADE, quantities are fixed by the listing — always 1 trade per match
+        if (listing.type === 'TRADE') {
+          return { listing, quantity: 1 };
+        }
+
         // Extract quantity from the message — look for a number before or after the item name
         let quantity = 1;
-        const itemNameLower = listing.itemName.toLowerCase();
+        const itemNameLower = matchName.toLowerCase();
         const itemIndex = lower.indexOf(itemNameLower);
 
         // Check for number before the item name: "buy 10 Goblin's Skull"
@@ -216,7 +228,7 @@ export class MerchantEngine extends EventEmitter {
         }
 
         // Check for number after the item name: "Goblin's Skull 10"
-        const afterText = message.substring(itemIndex + listing.itemName.length).trim();
+        const afterText = message.substring(itemIndex + matchName.length).trim();
         const afterMatch = afterText.match(/^\s*(\d+)/);
         if (afterMatch) {
           quantity = parseInt(afterMatch[1], 10);
@@ -225,6 +237,13 @@ export class MerchantEngine extends EventEmitter {
         // Clamp to available quantity
         quantity = Math.min(quantity, listing.quantityRemaining);
         if (quantity < 1) quantity = 1;
+
+        // If stackSize is set, round quantity to nearest multiple of stackSize
+        if (listing.stackSize && listing.stackSize > 0) {
+          quantity = Math.round(quantity / listing.stackSize) * listing.stackSize;
+          if (quantity < listing.stackSize) quantity = listing.stackSize;
+          quantity = Math.min(quantity, listing.quantityRemaining);
+        }
 
         return { listing, quantity };
       }
@@ -281,6 +300,7 @@ export class MerchantEngine extends EventEmitter {
   }
 
   private onExchangeStarted(targetId: number, targetName: string): void {
+    console.log(`[MerchantEngine] Exchange started with "${targetName}" (id=${targetId}), current state=${this.state}`);
     // Register this entity ID so we know it for future exchanges
     this.entityTracker.registerEntity(targetId, targetName);
 
@@ -322,6 +342,7 @@ export class MerchantEngine extends EventEmitter {
 
   private onExchangeItemAdded(party: number, index: number, sprite: number, name: string): void {
     if (!this.currentExchange) return;
+    console.log(`[MerchantEngine] Exchange item added: party=${party === ExchangeParty.Them ? 'THEM' : 'US'}, name="${name}", sprite=${sprite}, index=${index}`);
 
     const item = { name, sprite, index };
 
@@ -331,6 +352,8 @@ export class MerchantEngine extends EventEmitter {
       this.tryAutoFill();
     } else {
       this.currentExchange.ourItems.push(item);
+      // Adding an item on our side resets their accept in the game server
+      this.currentExchange.theyAccepted = false;
     }
 
     this.emit('exchangeUpdated', this.currentExchange);
@@ -345,6 +368,8 @@ export class MerchantEngine extends EventEmitter {
       this.tryAutoFill();
     } else {
       this.currentExchange.ourGold = amount;
+      // Adding gold on our side resets their accept in the game server
+      this.currentExchange.theyAccepted = false;
     }
 
     this.emit('exchangeUpdated', this.currentExchange);
@@ -385,16 +410,25 @@ export class MerchantEngine extends EventEmitter {
   }
 
   /**
-   * Called when the other party adds items or gold.
+   * Called when the other party adds items/gold or accepts.
    * Checks if their offer matches a listing and fills our side automatically.
+   *
+   * For BUY listings, we fill (place gold) as soon as the item is validated,
+   * WITHOUT waiting for them to accept first. This is because adding gold to the
+   * exchange resets the other party's accept — if we waited for their accept and
+   * then added gold, they'd need to re-accept but the engine would already be in
+   * AWAITING_CONFIRM state and would never re-trigger the fill.
+   *
+   * For SELL listings, we wait for them to accept first since we need to validate
+   * the gold amount they placed. Our item placement will reset their accept, and
+   * they'll need to re-accept after seeing our items.
    */
   private tryAutoFill(): void {
     if (!this.currentExchange) return;
     // Don't fill twice
     if (this.state === MerchantState.FILLING || this.state === MerchantState.AWAITING_CONFIRM) return;
 
-    // Wait until they've clicked Accept before we fill our side
-    if (!this.currentExchange.theyAccepted) return;
+    console.log(`[MerchantEngine] tryAutoFill: state=${this.state}, target="${this.currentExchange.targetName}", theirItems=${this.currentExchange.theirItems.length}, theirGold=${this.currentExchange.theirGold}, theyAccepted=${this.currentExchange.theyAccepted}`);
 
     // Find the matching queued whisper/listing for this exchange partner
     const queuedRequest = this.whisperQueue.find(
@@ -403,31 +437,65 @@ export class MerchantEngine extends EventEmitter {
 
     if (!queuedRequest?.matchedListing) {
       // No whisper match — try matching any active listing by what they offered
+      console.log(`[MerchantEngine] tryAutoFill: no matching whisper/listing for "${this.currentExchange.targetName}" in queue (${this.whisperQueue.length} entries: ${this.whisperQueue.map(w => `${w.playerName}:${!!w.matchedListing}`).join(', ')})`);
       return;
     }
 
     const listing = queuedRequest.matchedListing;
     const requestedQty = queuedRequest.requestedQuantity;
-    const totalPrice = listing.price * requestedQty;
+
+    // If stackSize is set, price covers the whole stack; otherwise price is per-unit
+    const totalPrice = listing.stackSize
+      ? listing.price * Math.ceil(requestedQty / listing.stackSize)
+      : listing.price * requestedQty;
 
     if (listing.type === 'SELL') {
-      // We're selling: they need to place enough gold for the total
+      // We're selling: wait for their accept, then validate gold and place item
+      if (!this.currentExchange.theyAccepted) return;
+
       if (this.currentExchange.theirGold >= totalPrice) {
-        console.log(`[MerchantEngine] Gold validated (${this.currentExchange.theirGold} >= ${totalPrice} for ${requestedQty}x) and they accepted, filling sell`);
+        console.log(`[MerchantEngine] Gold validated (${this.currentExchange.theirGold} >= ${totalPrice} for ${requestedQty}x, stackSize=${listing.stackSize ?? 'none'}) and they accepted, filling sell`);
         this.state = MerchantState.FILLING;
         this.emit('stateChanged', this.state);
         this.emit('requestFillSell', listing, this.currentExchange.targetId, requestedQty);
+      } else {
+        console.log(`[MerchantEngine] Gold insufficient: ${this.currentExchange.theirGold} < ${totalPrice} needed for ${requestedQty}x at ${listing.price} each (stackSize=${listing.stackSize ?? 'none'})`);
       }
     } else if (listing.type === 'BUY') {
-      // We're buying: they need to place the item
+      // We're buying: validate item presence, then place gold immediately.
+      // Don't wait for their accept — placing gold would reset it anyway.
+      const listingName = listing.itemName.toLowerCase();
       const hasItem = this.currentExchange.theirItems.some(
-        (i) => i.name.toLowerCase() === listing.itemName.toLowerCase(),
+        (i) => i.name.toLowerCase() === listingName || i.name.toLowerCase().startsWith(listingName),
       );
       if (hasItem) {
-        console.log(`[MerchantEngine] Item validated and they accepted, filling buy`);
+        console.log(`[MerchantEngine] Item validated, filling buy (placing ${totalPrice} gold for ${requestedQty}x)`);
+        console.log(`[MerchantEngine] Their items: ${JSON.stringify(this.currentExchange.theirItems.map(i => i.name))}`);
         this.state = MerchantState.FILLING;
         this.emit('stateChanged', this.state);
         this.emit('requestFillBuy', listing, this.currentExchange.targetId, requestedQty);
+      } else {
+        console.log(`[MerchantEngine] BUY item not found in their offer. Looking for "${listing.itemName}", they have: ${JSON.stringify(this.currentExchange.theirItems.map(i => i.name))}`);
+      }
+    } else if (listing.type === 'TRADE') {
+      // We're trading: validate they placed the wanted item, then place our offered item.
+      // Don't wait for their accept — placing our item would reset it anyway.
+      const wantedName = listing.wantedItems?.[0]?.name?.toLowerCase();
+      if (!wantedName) return;
+
+      const hasWanted = this.currentExchange.theirItems.some(
+        (i) => i.name.toLowerCase() === wantedName || i.name.toLowerCase().startsWith(wantedName),
+      );
+      if (hasWanted) {
+        // Use the listing's offered quantity, not the whisper quantity
+        const offeredQty = listing.quantity;
+        console.log(`[MerchantEngine] Trade item validated, filling trade (placing ${offeredQty}x "${listing.itemName}" for their "${wantedName}")`);
+        console.log(`[MerchantEngine] Their items: ${JSON.stringify(this.currentExchange.theirItems.map(i => i.name))}`);
+        this.state = MerchantState.FILLING;
+        this.emit('stateChanged', this.state);
+        this.emit('requestFillTrade', listing, this.currentExchange.targetId, offeredQty);
+      } else {
+        console.log(`[MerchantEngine] TRADE wanted item not found in their offer. Looking for "${wantedName}", they have: ${JSON.stringify(this.currentExchange.theirItems.map(i => i.name))}`);
       }
     }
   }
@@ -445,23 +513,44 @@ export class MerchantEngine extends EventEmitter {
     }
 
     // Update listing quantity
-    listing.quantityRemaining -= tradedQuantity;
+    // For TRADE, decrement by 1 (one trade completed); for BUY/SELL, by traded quantity
+    const decrementBy = listing.type === 'TRADE' ? 1 : tradedQuantity;
+    listing.quantityRemaining -= decrementBy;
     if (listing.quantityRemaining <= 0) {
       listing.status = 'SOLD_OUT';
     }
 
-    const totalPrice = listing.price * tradedQuantity;
+    const totalPrice = listing.stackSize
+      ? listing.price * Math.ceil(tradedQuantity / listing.stackSize)
+      : listing.price * tradedQuantity;
 
     // Record transaction
+    let itemsGiven: { name: string; quantity: number }[] = [];
+    let itemsReceived: { name: string; quantity: number }[] = [];
+    let goldGiven = 0;
+    let goldReceived = 0;
+
+    if (listing.type === 'SELL') {
+      itemsGiven = [{ name: listing.itemName, quantity: tradedQuantity }];
+      goldReceived = totalPrice;
+    } else if (listing.type === 'BUY') {
+      itemsReceived = [{ name: listing.itemName, quantity: tradedQuantity }];
+      goldGiven = totalPrice;
+    } else if (listing.type === 'TRADE') {
+      // We gave our offered item (listing.quantity per trade), received their wanted item
+      itemsGiven = [{ name: listing.itemName, quantity: listing.quantity }];
+      itemsReceived = listing.wantedItems?.map(w => ({ name: w.name, quantity: w.quantity })) ?? [];
+    }
+
     const transaction: Transaction = {
       id: crypto.randomUUID(),
       listingId: listing.id,
       counterpartyName: this.currentExchange?.targetName ?? 'Unknown',
       type: listing.type,
-      itemsGiven: listing.type === 'SELL' ? [{ name: listing.itemName, quantity: tradedQuantity }] : [],
-      itemsReceived: listing.type === 'BUY' ? [{ name: listing.itemName, quantity: tradedQuantity }] : [],
-      goldGiven: listing.type === 'BUY' ? totalPrice : 0,
-      goldReceived: listing.type === 'SELL' ? totalPrice : 0,
+      itemsGiven,
+      itemsReceived,
+      goldGiven,
+      goldReceived,
       status: 'COMPLETED',
       timestamp: new Date().toISOString(),
     };

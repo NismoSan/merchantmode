@@ -68,9 +68,9 @@ export default function Dashboard({ proxyStatus, engineState, characterName }: P
     api.inventory.onGoldUpdate(handleGoldUpdate);
     api.engine.onTransaction(handleTransaction);
 
-    return () => {
-      api.removeAllListeners();
-    };
+    // NOTE: We intentionally do NOT call api.removeAllListeners() here.
+    // That would kill App-level listeners (characters:connected, etc.).
+    // These listeners filter by characterName, so stale ones are harmless.
   }, [characterName]);
 
   async function loadListings() {

@@ -51,9 +51,7 @@ export default function Whispers({ characters }: Props) {
 
     api.engine.onWhisper(handleWhisper);
 
-    return () => {
-      api.removeAllListeners();
-    };
+    // Don't call removeAllListeners — it kills App-level listeners
   }, [characters]);
 
   // Auto-scroll to bottom when new whispers come in

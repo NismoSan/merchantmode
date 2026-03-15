@@ -5,24 +5,31 @@ import { ProxyServer } from '../core/proxy/proxy-server';
 import { ProxyConnection } from '../core/proxy/proxy-connection';
 import { MerchantEngine } from '../core/engine/merchant-engine';
 import { InventoryTracker } from '../core/engine/inventory-tracker';
+import { LocationTracker } from '../core/engine/location-tracker';
+import { MerchantHubClient } from '../core/network/merchant-hub-client';
+import type { MerchantHubCharacter } from '../core/network/merchant-hub-client';
 import { BinaryWriter } from '../core/network/serialization/binary-writer';
 import { ClientOpCode, ServerOpCode } from '../core/network/packets/op-codes';
 import { ExchangeClientAction } from '../core/network/packets/exchange/exchange-types';
 import { ConnectionPhase } from '../core/proxy/connection-state';
-import { launchClient, closeClientHandles, type LaunchedClient } from '../core/launcher/client-launcher';
+import { launchClient, readCharacterName, closeClientHandles, type LaunchedClient } from '../core/launcher/client-launcher';
 import * as db from '../core/db/database';
 import type { MerchantListing } from '../core/models/listing';
 
 let mainWindow: BrowserWindow | null = null;
 let proxyServer: ProxyServer | null = null;
-let launchedClient: LaunchedClient | null = null;
+const merchantHub = new MerchantHubClient();
+const launchedClients: Map<number, LaunchedClient> = new Map();
+const PROXY_PORT = 2615; // Local proxy port — avoids 2610-2612 which bots commonly bind
 
 // Per-character contexts — each connected character gets its own engine + inventory
 interface CharacterContext {
   characterName: string;
+  connectionType: 'launched' | 'bot';
   connection: ProxyConnection;
   engine: MerchantEngine;
   inventoryTracker: InventoryTracker;
+  locationTracker: LocationTracker;
 }
 const characterContexts: Map<string, CharacterContext> = new Map();
 
@@ -49,6 +56,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'Merchant Mode',
+    icon: path.join(__dirname, '../../build/icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -70,8 +78,21 @@ function createWindow() {
 
 // --- Per-character context creation ---
 
+function pushHubUpdate(): void {
+  const characters: MerchantHubCharacter[] = [];
+  for (const ctx of characterContexts.values()) {
+    const loc = ctx.locationTracker.getLocation();
+    const listings = ctx.engine.getListings()
+      .filter((l) => l.status === 'ACTIVE')
+      .map((l) => ({ type: l.type, itemName: l.itemName, price: l.price, status: l.status }));
+    characters.push({ name: ctx.characterName, mapName: loc.mapName, x: loc.x, y: loc.y, listings });
+  }
+  merchantHub.sendUpdate(characters);
+}
+
 function createCharacterContext(characterName: string, connection: ProxyConnection): CharacterContext {
   const inventoryTracker = new InventoryTracker();
+  const locationTracker = new LocationTracker();
   const engine = new MerchantEngine(inventoryTracker);
 
   engine.setCharacterName(characterName);
@@ -85,20 +106,58 @@ function createCharacterContext(characterName: string, connection: ProxyConnecti
     send('engine:state', { characterName, state });
   });
 
+  // Track recent auto-reply targets to prevent reply loops
+  const recentAutoReplies: Map<string, number> = new Map();
+
   engine.on('whisperReceived', (whisper: any) => {
     send('engine:whisper', { characterName, ...whisper });
     // Auto-reply only if enabled
     const autoReplyEnabled = db.getSetting('auto_reply_enabled', 'true');
     if (autoReplyEnabled !== 'true') return;
 
+    // Rate-limit: don't auto-reply to the same player more than once per 10 seconds
+    const playerKey = whisper.playerName.toLowerCase();
+    const lastReply = recentAutoReplies.get(playerKey);
+    if (lastReply && Date.now() - lastReply < 10_000) return;
+
     if (whisper.matchedListing) {
-      const template = db.getSetting('reply_available', 'I have {item} for {price}. Open exchange with me to buy.');
-      const msg = template
-        .replace('{item}', whisper.matchedListing.itemName)
-        .replace('{price}', formatGold(whisper.matchedListing.price));
+      const qty = whisper.requestedQuantity ?? 1;
+      const listing = whisper.matchedListing;
+      const totalPrice = listing.stackSize
+        ? listing.price * Math.ceil(qty / listing.stackSize)
+        : listing.price * qty;
+
+      let msg: string;
+      if (listing.type === 'TRADE') {
+        const wantedEntry = listing.wantedItems?.[0];
+        const offeredDisplay = listing.quantity > 1 ? `${listing.quantity}x ${listing.itemName}` : listing.itemName;
+        const wantedDisplay = wantedEntry
+          ? (wantedEntry.quantity > 1 ? `${wantedEntry.quantity}x ${wantedEntry.name}` : wantedEntry.name)
+          : 'your item';
+        const template = db.getSetting('reply_trade', 'I will trade {item} for {wanted}. Open exchange with me.');
+        msg = template
+          .replace('{item}', offeredDisplay)
+          .replace('{wanted}', wantedDisplay);
+      } else if (listing.type === 'BUY') {
+        // We're buying — tell the seller our offer price
+        const template = db.getSetting('reply_buying', 'I am buying {item} for {price}. Open exchange with me to sell.');
+        const itemDisplay = qty > 1 ? `${qty}x ${listing.itemName}` : listing.itemName;
+        msg = template
+          .replace('{item}', itemDisplay)
+          .replace('{price}', formatGold(totalPrice));
+      } else {
+        // We're selling
+        const template = db.getSetting('reply_available', 'I have {item} for {price}. Open exchange with me to buy.');
+        const itemDisplay = qty > 1 ? `${qty}x ${listing.itemName}` : listing.itemName;
+        msg = template
+          .replace('{item}', itemDisplay)
+          .replace('{price}', formatGold(totalPrice));
+      }
+      recentAutoReplies.set(playerKey, Date.now());
       injectWhisper(characterName, whisper.playerName, msg);
     } else {
       const template = db.getSetting('reply_not_found', "Sorry, I don't have that item for sale.");
+      recentAutoReplies.set(playerKey, Date.now());
       injectWhisper(characterName, whisper.playerName, template);
     }
   });
@@ -178,6 +237,33 @@ function createCharacterContext(characterName: string, connection: ProxyConnecti
     setTimeout(() => engine.onFillComplete(), 500);
   });
 
+  engine.on('requestFillTrade', (listing: MerchantListing, targetId: number, requestedQty: number) => {
+    // Trade: place our offered item from inventory (same mechanic as selling)
+    const slot = inventoryTracker.findSlotByName(listing.itemName);
+    console.log(`[MerchantMode:${characterName}] FillTrade: looking for "${listing.itemName}" to trade for "${listing.wantedItems?.[0]?.name}", found slot=${slot}`);
+    if (slot !== undefined) {
+      const item = inventoryTracker.getItem(slot);
+      if (item?.isStackable) {
+        const qty = Math.min(requestedQty, item.quantity);
+        console.log(`[MerchantMode:${characterName}] Adding stackable trade item slot=${slot}, qty=${qty}`);
+        engine.once('quantityPrompt', (promptSlot: number, promptTargetId: number) => {
+          console.log(`[MerchantMode:${characterName}] QuantityPrompt received for slot=${promptSlot}, responding with qty=${qty}`);
+          injectExchangeAddStackable(characterName, promptTargetId, promptSlot, qty);
+          setTimeout(() => engine.onFillComplete(), 500);
+        });
+        injectExchangeAddItem(characterName, targetId, slot);
+      } else {
+        console.log(`[MerchantMode:${characterName}] Adding trade item slot=${slot} name="${item?.name}" to exchange`);
+        injectExchangeAddItem(characterName, targetId, slot);
+        setTimeout(() => engine.onFillComplete(), 500);
+      }
+    } else {
+      // Item not found in inventory
+      injectExchangeAction(characterName, ExchangeClientAction.Cancel, targetId);
+      send('engine:validation-failed', { characterName, reason: `Trade item "${listing.itemName}" not found in inventory` });
+    }
+  });
+
   // Inventory tracker events -> renderer
   inventoryTracker.on('itemAdded', () => {
     send('inventory:update', { characterName, items: Array.from(inventoryTracker.getState().items.values()) });
@@ -191,8 +277,25 @@ function createCharacterContext(characterName: string, connection: ProxyConnecti
     send('inventory:gold-update', { characterName, gold });
   });
 
-  const ctx: CharacterContext = { characterName, connection, engine, inventoryTracker };
-  console.log(`[MerchantMode] Character context created: ${characterName}`);
+  // Location tracker events -> hub update
+  locationTracker.on('locationChanged', () => {
+    pushHubUpdate();
+  });
+
+  // Determine connection type: check if any launched process has this character name
+  let connectionType: 'launched' | 'bot' = 'bot';
+  for (const [pid] of launchedClients) {
+    try {
+      const name = readCharacterName(pid);
+      if (name && name === characterName) {
+        connectionType = 'launched';
+        break;
+      }
+    } catch { /* process may have exited */ }
+  }
+
+  const ctx: CharacterContext = { characterName, connectionType, connection, engine, inventoryTracker, locationTracker };
+  console.log(`[MerchantMode] Character context created: ${characterName} (${connectionType})`);
   return ctx;
 }
 
@@ -200,7 +303,7 @@ function startProxy() {
   if (proxyServer) proxyServer.stop();
 
   proxyServer = new ProxyServer({
-    listenPort: 2610,
+    listenPort: PROXY_PORT,
     remoteHost: 'da0.kru.com',
     remotePort: 2610,
   });
@@ -224,7 +327,7 @@ function startProxy() {
     if (charName && isInGame && !characterContexts.has(charName)) {
       const ctx = createCharacterContext(charName, connection);
       characterContexts.set(charName, ctx);
-      send('characters:connected', charName);
+      send('characters:connected', { name: charName, connectionType: ctx.connectionType });
 
       // Replay any packets that were buffered before context creation (inventory, stats, etc.)
       const buffered = preContextPacketBuffer.get(charName);
@@ -232,6 +335,7 @@ function startProxy() {
         console.log(`[MerchantMode] Replaying ${buffered.length} buffered packets for ${charName}`);
         for (const pkt of buffered) {
           ctx.engine.processServerPacket(pkt.opCode, pkt.data);
+          ctx.locationTracker.processServerPacket(pkt.opCode, pkt.data);
         }
         preContextPacketBuffer.delete(charName);
       }
@@ -252,11 +356,20 @@ function startProxy() {
       characterContexts.get(charName)!.connection = connection;
     }
 
+    // Forward client packets to location tracker (for walk tracking)
+    if (direction === 'client' && charName) {
+      const ctx = characterContexts.get(charName);
+      if (ctx) {
+        ctx.locationTracker.processClientPacket(opCode, data);
+      }
+    }
+
     // Forward server packets to the correct character's engine
     if (direction === 'server' && charName) {
       const ctx = characterContexts.get(charName);
       if (ctx) {
         ctx.engine.processServerPacket(opCode, data);
+        ctx.locationTracker.processServerPacket(opCode, data);
       } else if (charName) {
         // Context doesn't exist yet — buffer server packets for replay once context is created
         if (!preContextPacketBuffer.has(charName)) {
@@ -282,25 +395,70 @@ function startProxy() {
   });
 
   proxyServer.on('disconnection', (connection?: ProxyConnection) => {
-    // Find and remove the context for this connection
     if (connection) {
-      for (const [name, ctx] of characterContexts) {
+      // Look up by character name from the connection's state — more reliable than
+      // reference comparison which can go stale after redirect reconnections.
+      const charName = connection.connectionState.characterName;
+
+      // Also try reference match for connections that never reached authentication
+      let matchedName: string | undefined;
+      if (charName && characterContexts.has(charName)) {
+        const ctx = characterContexts.get(charName)!;
+        // Only remove if the context still points to THIS connection.
+        // If it was migrated to a newer connection (redirect), skip removal.
         if (ctx.connection === connection) {
-          ctx.inventoryTracker.clear();
-          characterContexts.delete(name);
-          preContextPacketBuffer.delete(name);
-          send('characters:disconnected', name);
-          console.log(`[MerchantMode] Character disconnected: ${name}`);
-          break;
+          matchedName = charName;
         }
+      }
+
+      // Fallback: iterate all contexts to match by connection reference
+      // (covers edge cases where characterName wasn't set on the connection)
+      if (!matchedName) {
+        for (const [name, ctx] of characterContexts) {
+          if (ctx.connection === connection) {
+            matchedName = name;
+            break;
+          }
+        }
+      }
+
+      if (matchedName) {
+        const ctx = characterContexts.get(matchedName)!;
+        ctx.engine.removeAllListeners();
+        ctx.inventoryTracker.removeAllListeners();
+        ctx.inventoryTracker.clear();
+        ctx.locationTracker.removeAllListeners();
+        ctx.locationTracker.clear();
+        characterContexts.delete(matchedName);
+        preContextPacketBuffer.delete(matchedName);
+        send('characters:disconnected', matchedName);
+        console.log(`[MerchantMode] Character disconnected: ${matchedName}`);
+        pushHubUpdate();
+      }
+    }
+    // Clean up any launched client entries whose processes are no longer alive
+    for (const [pid, client] of launchedClients) {
+      try {
+        readCharacterName(pid);
+      } catch {
+        closeClientHandles(client);
+        launchedClients.delete(pid);
       }
     }
     send('proxy:status', proxyServer?.isConnected() ? 'connected' : 'disconnected');
   });
 
   proxyServer.start();
-  console.log('[MerchantMode] Proxy listening on localhost:2610');
+  console.log(`[MerchantMode] Proxy listening on localhost:${PROXY_PORT}`);
+
+  // Connect to the global merchant hub
+  merchantHub.connect();
 }
+
+// Forward merchant hub updates to the renderer
+merchantHub.on('merchantsUpdated', (merchants) => {
+  send('merchants:updated', merchants);
+});
 
 // --- Packet injection helpers ---
 
@@ -375,7 +533,9 @@ function registerIpcHandlers() {
   ipcMain.handle('proxy:stop', () => { proxyServer?.stop(); });
 
   // Characters
-  ipcMain.handle('characters:list', () => Array.from(characterContexts.keys()));
+  ipcMain.handle('characters:list', () =>
+    Array.from(characterContexts.values()).map((ctx) => ({ name: ctx.characterName, connectionType: ctx.connectionType }))
+  );
 
   // Engine state (character-scoped)
   ipcMain.handle('engine:state', (_e, characterName?: string) => {
@@ -403,6 +563,7 @@ function registerIpcHandlers() {
     // Refresh the appropriate engine
     const ctx = characterContexts.get(listing.characterName ?? '');
     if (ctx) ctx.engine.setListings(db.getAllListings(listing.characterName));
+    pushHubUpdate();
     return db.getAllListings(listing.characterName);
   });
 
@@ -410,6 +571,7 @@ function registerIpcHandlers() {
     db.updateListing(listing);
     const ctx = characterContexts.get(listing.characterName ?? '');
     if (ctx) ctx.engine.setListings(db.getAllListings(listing.characterName));
+    pushHubUpdate();
     return db.getAllListings(listing.characterName);
   });
 
@@ -419,6 +581,7 @@ function registerIpcHandlers() {
       const ctx = characterContexts.get(characterName);
       if (ctx) ctx.engine.setListings(db.getAllListings(characterName));
     }
+    pushHubUpdate();
     return db.getAllListings(characterName);
   });
 
@@ -443,6 +606,66 @@ function registerIpcHandlers() {
     return 0;
   });
 
+  // Global merchants
+  ipcMain.handle('merchants:getAll', () => merchantHub.getMerchants());
+
+  // AE profile data — proxy through main process for Electron compatibility
+  const AE_API = 'https://api.aislingexchange.com/api';
+  const spriteCache = new Map<string, { buffer: Buffer; expiresAt: number } | null>();
+  const avatarCache = new Map<string, { data: any; expiresAt: number }>();
+
+  ipcMain.handle('ae:sprite', async (_e, name: string) => {
+    console.log('[AE] sprite requested for:', name);
+    const key = name.toLowerCase();
+    const cached = spriteCache.get(key);
+    if (cached !== undefined) {
+      if (cached === null || Date.now() > cached.expiresAt) {
+        spriteCache.delete(key);
+      } else {
+        return cached.buffer.toString('base64');
+      }
+    }
+    try {
+      const url = `${AE_API}/players/${encodeURIComponent(name)}/sprite.png`;
+      console.log('[AE] fetching sprite from:', url);
+      const res = await fetch(url);
+      console.log('[AE] sprite response:', res.status, res.statusText);
+      if (!res.ok) {
+        spriteCache.set(key, null);
+        setTimeout(() => spriteCache.delete(key), 60_000);
+        return null;
+      }
+      const buffer = Buffer.from(await res.arrayBuffer());
+      console.log('[AE] sprite fetched for:', name, 'size:', buffer.length);
+      spriteCache.set(key, { buffer, expiresAt: Date.now() + 5 * 60_000 });
+      return buffer.toString('base64');
+    } catch (err) {
+      console.error('[AE] sprite fetch error:', err);
+      return null;
+    }
+  });
+
+  ipcMain.handle('ae:avatar', async (_e, name: string) => {
+    console.log('[AE] avatar requested for:', name);
+    const key = name.toLowerCase();
+    const cached = avatarCache.get(key);
+    if (cached && Date.now() < cached.expiresAt) return cached.data;
+    try {
+      const url = `${AE_API}/players/${encodeURIComponent(name)}/avatar`;
+      console.log('[AE] fetching avatar from:', url);
+      const res = await fetch(url);
+      console.log('[AE] avatar response:', res.status, res.statusText);
+      if (!res.ok) return null;
+      const data = await res.json();
+      console.log('[AE] avatar data:', JSON.stringify(data));
+      avatarCache.set(key, { data, expiresAt: Date.now() + 5 * 60_000 });
+      return data;
+    } catch (err) {
+      console.error('[AE] avatar fetch error:', err);
+      return null;
+    }
+  });
+
   // Packet sniffer
   ipcMain.handle('sniffer:getLog', () => packetLog.slice(-200));
 
@@ -463,8 +686,9 @@ function registerIpcHandlers() {
       if (!proxyServer?.isListening()) {
         startProxy();
       }
-      launchedClient = launchClient(clientPath, { localPort: 2610, skipIntro: true });
-      return { success: true, processId: launchedClient.processId };
+      const client = launchClient(clientPath, { localPort: PROXY_PORT, skipIntro: true });
+      launchedClients.set(client.processId, client);
+      return { success: true, processId: client.processId };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -537,8 +761,12 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  merchantHub.disconnect();
   proxyServer?.stop();
-  if (launchedClient) closeClientHandles(launchedClient);
+  for (const client of launchedClients.values()) {
+    closeClientHandles(client);
+  }
+  launchedClients.clear();
   db.closeDb();
   app.quit();
 });

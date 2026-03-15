@@ -106,7 +106,7 @@ export class ProxyServer extends EventEmitter {
     connection.on('disposed', () => {
       const idx = this.connections.indexOf(connection);
       if (idx !== -1) this.connections.splice(idx, 1);
-      this.emit('disconnection');
+      this.emit('disconnection', connection);
     });
 
     try {

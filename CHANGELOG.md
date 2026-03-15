@@ -1,0 +1,82 @@
+# Changelog
+
+## v1.1.0
+
+### New Features
+- **Global Merchant Network** — MerchantMode now connects to the AislingExchange merchant hub (`wss://api.aislingexchange.com/ws/merchants`). Your active listings, character name, and map location are shared in real time with other MerchantMode users
+- **All Merchants page** — new "All Merchants" tab on the Dashboard shows every online MerchantMode user in a card grid with their listings, location, and character sprite/avatar pulled from AislingExchange profiles
+- **All Merchants listings view** — the "All Merchants" tab on the Listings page shows a unified, type-grouped list of every listing from every online merchant, with avatar, player name, and map location per row
+- **Character sprites & avatars** — merchant cards and listing rows display each character's AislingExchange avatar circle (with custom crop offsets) and full sprite image, fetched via the AE API and proxied through Electron
+- **Character face in tabs** — character tabs now show a cropped face sprite to the left of the character name for quick visual identification
+- **Trade listing auto-matching** — whispers now match against TRADE listings by the wanted item name (what the whisperer has), not the offered item name
+- **Trade auto-fill** — the exchange engine now automatically places your offered item from inventory when a trade listing is matched, supporting both stackable and non-stackable items
+- **Trade auto-reply** — customizable whisper reply template for trade listings with `{item}` and `{wanted}` placeholders
+- **Location tracking** — new `LocationTracker` module tracks each character's current map name and coordinates, broadcast to the merchant hub on every map change
+- **Whisper rate limiting** — auto-replies are now rate-limited to one per player per 10 seconds to prevent reply loops
+
+### Bug Fixes
+- **Exchange accept reset** — adding items or gold on your side now correctly resets the other party's accept state, preventing premature confirmation
+- **Disconnect cleanup** — character context cleanup on disconnect is now more robust, matching by connection reference as a fallback and properly cleaning up location tracker listeners
+- **Stack quantity rounding** — whisper-matched quantities are now rounded to the nearest stack size multiple when selling stacked items
+
+### UI Improvements
+- "All Merchants" tab moved to appear after all player character tabs instead of before
+- Settings page now includes a "Trade reply" template field
+- Placeholder help text updated to include `{wanted}` for trade templates
+
+### Changes from v1.0.4
+- `core/engine/location-tracker.ts` — **new file**: tracks character map name and x/y from server packets, emits `locationChanged`
+- `core/network/merchant-hub-client.ts` — **new file**: WebSocket client for the AislingExchange merchant hub with auto-reconnect and heartbeat
+- `src/components/AllMerchantsView.tsx` — **new file**: merchant card grid with avatar circles, full sprites, and listing summaries
+- `src/lib/ae-api.ts` — **new file**: AE API utility for fetching sprites (as base64 data URLs) and avatar offset data via IPC
+- `electron/main.ts` — added `MerchantHubClient`, `LocationTracker`, `pushHubUpdate()`, trade fill/reply logic, AE sprite/avatar IPC handlers, whisper rate limiting, improved disconnect cleanup
+- `electron/preload.ts` — added `merchants` and `ae` IPC bridges
+- `src/vite-env.d.ts` — added `merchants`, `ae`, `GlobalMerchantData`, `GlobalMerchantListing` type declarations
+- `src/App.tsx` — added `allMerchantsMode` state, merchant hub subscription, All Merchants tab routing, wired `allMerchants` to Listings page
+- `src/components/CharacterTabs.tsx` — added `CharacterFace` component with sprite cropping, reordered tabs (players first, All Merchants last)
+- `src/pages/Listings.tsx` — added `AllMerchantsListings` view with type-grouped listing rows, merchant avatars, and location info
+- `src/pages/Settings.tsx` — added trade reply template field, updated placeholder help text
+- `core/engine/merchant-engine.ts` — trade whisper matching by wanted item, exchange accept reset on our-side changes, logging improvements
+
+## v1.0.4
+
+### New Features
+- **Bot client compatibility** — MerchantMode can now run alongside bot clients without port conflicts; proxy moved to port 2615 to avoid colliding with bot proxies on 2610–2612
+- **Multiple launched clients** — "Launch Client" can now be clicked multiple times to run several DA clients simultaneously, each tracked independently
+- **Connection type detection** — characters are automatically tagged as "launched" or "bot" based on whether they were spawned by MerchantMode; bot clients show a "BOT" badge in the character tabs
+
+### UI Improvements
+- Character tabs display a "BOT" badge next to bot-connected characters
+- Empty state message updated: "Launch a client or connect a bot to get started"
+- New "Bot Clients" section in Settings showing the proxy address (`localhost:2615`) with a copy button
+
+### Changes from v1.0.3
+- `electron/main.ts` — `launchedClient` single var replaced with `launchedClients` Map; added `connectionType` field to `CharacterContext`; proxy listens on port 2615; `characters:connected` event and `characters:list` IPC include connection type; dead launched clients cleaned up on disconnect
+- `electron/preload.ts` — `characters.list` and `characters.onConnected` types updated to include `connectionType`
+- `src/vite-env.d.ts` — `MerchantModeAPI` type declarations updated to match preload changes
+- `src/App.tsx` — added `characterTypes` state; populated from list and connected events; cleaned up on disconnect; passed to `CharacterTabs`
+- `src/components/CharacterTabs.tsx` — accepts `characterTypes` prop; renders "BOT" badge; updated empty state text
+- `src/pages/Settings.tsx` — added "Bot Clients" section with proxy address and copy button; local proxy port updated to 2615
+
+## v1.0.3
+
+### Bug Fixes
+- Fixed whisper reply showing unit price instead of total when buying multiple items (e.g. "2 item" now replies with "I have 2x Item for 10K" instead of showing the single-item price)
+- Added `stackSize` awareness to pricing — when "sell as stack" is enabled, the price now correctly applies to the whole stack rather than per-unit
+- Added insufficient gold logging to help debug failed exchange validations
+
+### UI Improvements
+- Transactions page now fills the entire content area instead of being capped at a fixed height
+- About page content displayed in a 3-column layout
+- Connection status moved above the sidebar divider and centered
+- Gold bar sprite added as the app icon (window, taskbar, and installer)
+- Gold bar sprite displayed next to "Merchant Mode" in the sidebar title
+
+### Changes from v1.0.2
+- `core/engine/merchant-engine.ts` — stackSize-aware pricing in `tryAutoFill`, `onTradeComplete`, and `matchListing`; quantity rounding for stack-size listings
+- `electron/main.ts` — whisper reply includes quantity and total price; stackSize-aware pricing in reply; app window icon set to gold bar
+- `src/App.tsx` — sidebar title includes gold bar sprite; connection status repositioned and centered
+- `src/components/TransactionLog.tsx` — transaction list fills available height
+- `src/pages/About.tsx` — 3-column card layout
+- `build/icon.ico` — gold bar app icon
+- `package.json` — app icon configured for electron-builder

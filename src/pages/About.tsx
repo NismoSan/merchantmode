@@ -1,6 +1,30 @@
+import { useState, useEffect } from 'react';
+import { RefreshCw, Check, Download, AlertCircle } from 'lucide-react';
+
+type UpdateCheckState = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error';
+
 export default function About() {
+  const [checkState, setCheckState] = useState<UpdateCheckState>('idle');
+  const [version, setVersion] = useState('');
+  const [updateVersion, setUpdateVersion] = useState('');
+  const [percent, setPercent] = useState(0);
+
+  useEffect(() => {
+    window.merchantMode?.updater.getVersion().then(setVersion);
+    window.merchantMode?.updater.onStatus((data) => {
+      setCheckState(data.status as UpdateCheckState);
+      if (data.version) setUpdateVersion(data.version);
+      if (data.percent != null) setPercent(data.percent);
+    });
+  }, []);
+
+  const handleCheck = () => {
+    setCheckState('checking');
+    window.merchantMode?.updater.check();
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
         <h2 className="text-xl font-semibold gold-text">About</h2>
         <div
@@ -13,74 +37,123 @@ export default function About() {
         />
       </div>
 
-      {/* Merchant Mode */}
-      <div className="card p-6 space-y-4 animate-fade-in">
-        <h3 className="text-lg font-bold gold-text">Merchant Mode</h3>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-          Merchant Mode is an AFK merchant automation tool for Dark Ages. It acts as a local proxy
-          between your game client and the server, intercepting and handling trade-related packets
-          so you can set up buy and sell listings and walk away. When another player whispers your
-          character with a matching request, Merchant Mode automatically handles the exchange window,
-          places the items or gold, and completes the trade on your behalf.
-        </p>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-          The tool supports multiple characters simultaneously, real-time inventory tracking,
-          stackable item sales, price parsing with shorthand notation, and a full transaction log
-          so you never lose track of what was traded and when.
-        </p>
-        <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-          Based on an original idea from <span className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>Vamistle</span>.
-        </p>
+      {/* Version & Update Check */}
+      <div className="card p-4 animate-fade-in">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>
+              Version {version}
+            </p>
+            <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>
+              {checkState === 'checking' && 'Checking for updates...'}
+              {checkState === 'up-to-date' && 'You are on the latest version.'}
+              {checkState === 'available' && `Update v${updateVersion} found — downloading...`}
+              {checkState === 'downloading' && `Downloading update... ${percent}%`}
+              {checkState === 'ready' && `v${updateVersion} is ready to install.`}
+              {checkState === 'error' && 'Could not check for updates.'}
+              {checkState === 'idle' && 'Click to check for updates.'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {checkState === 'ready' ? (
+              <button
+                onClick={() => window.merchantMode?.updater.install()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold"
+                style={{
+                  background: '#22c55e',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  border: 'none',
+                }}
+              >
+                <Download size={13} />
+                Restart & Update
+              </button>
+            ) : (
+              <button
+                onClick={handleCheck}
+                disabled={checkState === 'checking' || checkState === 'downloading'}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold"
+                style={{
+                  background: 'var(--color-surface-400)',
+                  color: 'var(--color-text-primary)',
+                  cursor: checkState === 'checking' || checkState === 'downloading' ? 'not-allowed' : 'pointer',
+                  border: '1px solid var(--color-surface-500)',
+                  opacity: checkState === 'checking' || checkState === 'downloading' ? 0.6 : 1,
+                }}
+              >
+                {checkState === 'checking' ? (
+                  <RefreshCw size={13} className="animate-spin" />
+                ) : checkState === 'up-to-date' ? (
+                  <Check size={13} style={{ color: '#22c55e' }} />
+                ) : checkState === 'error' ? (
+                  <AlertCircle size={13} style={{ color: '#ef4444' }} />
+                ) : (
+                  <RefreshCw size={13} />
+                )}
+                Check for Updates
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
-      <Divider />
+      {/* Content in 3 columns */}
+      <div className="grid grid-cols-3 gap-4 animate-fade-in">
+        <div className="card p-5 space-y-3">
+          <h3 className="text-sm font-bold gold-text">Merchant Mode</h3>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+            Merchant Mode is an AFK merchant automation tool for Dark Ages. It acts as a local proxy
+            between your game client and the server, intercepting and handling trade-related packets
+            so you can set up buy and sell listings and walk away. When another player whispers your
+            character with a matching request, Merchant Mode automatically handles the exchange window,
+            places the items or gold, and completes the trade on your behalf.
+          </p>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+            The tool supports multiple characters simultaneously, real-time inventory tracking,
+            stackable item sales, price parsing with shorthand notation, and a full transaction log
+            so you never lose track of what was traded and when.
+          </p>
+          <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+            Based on an original idea from <span className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>Vamistle</span>.
+          </p>
+        </div>
 
-      {/* AislingExchange.com */}
-      <div className="card p-6 space-y-4 animate-fade-in" style={{ animationDelay: '50ms' }}>
-        <h3 className="text-lg font-bold gold-text">AislingExchange.com</h3>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-          AislingExchange.com is a community-driven marketplace and resource hub for Dark Ages players.
-          It provides a centralized platform where players can browse, list, and search for items
-          across the game's economy — bringing visibility and price discovery to a trade system that
-          has traditionally relied on in-game whispers, forums, and word of mouth.
-        </p>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-          Whether you're looking for rare equipment, tracking market trends, or trying to find the
-          right buyer for your loot, AislingExchange serves as the connective tissue between
-          Dark Ages merchants and the broader community. Merchant Mode is designed to work
-          hand-in-hand with the exchange, bridging the gap between online listings and in-game trades.
-        </p>
-      </div>
+        <div className="card p-5 space-y-3">
+          <h3 className="text-sm font-bold gold-text">AislingExchange.com</h3>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+            AislingExchange.com is a community-driven marketplace and resource hub for Dark Ages players.
+            It provides a centralized platform where players can browse, list, and search for items
+            across the game's economy — bringing visibility and price discovery to a trade system that
+            has traditionally relied on in-game whispers, forums, and word of mouth.
+          </p>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+            Whether you're looking for rare equipment, tracking market trends, or trying to find the
+            right buyer for your loot, AislingExchange serves as the connective tissue between
+            Dark Ages merchants and the broader community. Merchant Mode is designed to work
+            hand-in-hand with the exchange, bridging the gap between online listings and in-game trades.
+          </p>
+        </div>
 
-      <Divider />
-
-      {/* Lancelot */}
-      <div className="card p-6 space-y-4 animate-fade-in" style={{ animationDelay: '100ms' }}>
-        <h3 className="text-lg font-bold gold-text">About Lancelot</h3>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-          Lancelot is a long-time Dark Ages player and the developer behind AislingExchange.com
-          and Merchant Mode. His projects are focused on building tools that improve the quality of
-          life for the Dark Ages community — from trade automation to market infrastructure.
-        </p>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
-          His work includes reverse engineering the Dark Ages network protocol, building proxy-based
-          tools that interact with the game client, and creating web platforms that give players
-          better access to information about the game's economy and mechanics. All of these projects
-          share a common goal: making Dark Ages more accessible and enjoyable for everyone who still
-          calls Temuair home.
-        </p>
+        <div className="card p-5 space-y-3">
+          <h3 className="text-sm font-bold gold-text">About Lancelot</h3>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+            Lancelot is a long-time Dark Ages player and the developer behind AislingExchange.com
+            and Merchant Mode. His projects are focused on building tools that improve the quality of
+            life for the Dark Ages community — from trade automation to market infrastructure.
+          </p>
+          <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>
+            Everything Lancelot has learned about the Dark Ages network protocol and client internals
+            has come with the help of <span className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>SiLo</span>,{' '}
+            <span className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>Ramanayan</span>,{' '}
+            <span className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>Zeix</span>,
+            and many others in the community. But above all, it's{' '}
+            <span className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>SiLo</span>'s
+            dedication to the community and commitment to open source that deserves the real thanks —
+            without his work, none of these tools would exist.
+          </p>
+        </div>
       </div>
     </div>
-  );
-}
-
-function Divider() {
-  return (
-    <div
-      style={{
-        height: 1,
-        background: 'linear-gradient(90deg, transparent, var(--color-surface-500), transparent)',
-      }}
-    />
   );
 }

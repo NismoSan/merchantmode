@@ -44,8 +44,8 @@ export default function TransactionLog({ transactions }: Props) {
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-3">
         <span className="stat-label">
           Transaction Log <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 400 }}>({transactions.length})</span>
         </span>
@@ -67,7 +67,7 @@ export default function TransactionLog({ transactions }: Props) {
         </div>
       )}
 
-      <div className="space-y-1 max-h-80 overflow-y-auto">
+      <div className="space-y-1 flex-1 min-h-0 overflow-y-auto">
         {transactions.map((tx) => (
           <div
             key={tx.id}
@@ -83,16 +83,12 @@ export default function TransactionLog({ transactions }: Props) {
               {tx.type}
             </span>
             <div className="flex-1 min-w-0">
-              <p className="text-sm truncate" style={{ color: 'var(--color-text-primary)' }}>
+              <p className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
                 <span className="font-semibold">{tx.counterpartyName}</span>
-                {tx.itemsGiven.length > 0 && ` | Gave: ${tx.itemsGiven.map((i) => i.name).join(', ')}`}
-                {tx.itemsReceived.length > 0 && ` | Got: ${tx.itemsReceived.map((i) => i.name).join(', ')}`}
+                <span style={{ color: 'var(--color-text-secondary)' }}>{' — '}{formatExchange(tx)}</span>
               </p>
-              <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                {tx.goldGiven > 0 && <span style={{ color: 'var(--color-warning)' }}>Paid {formatGold(tx.goldGiven)}</span>}
-                {tx.goldReceived > 0 && <span style={{ color: 'var(--color-warning)' }}>Received {formatGold(tx.goldReceived)}</span>}
-                {' | '}
-                <span style={{ color: 'var(--color-text-tertiary)' }}>{new Date(tx.timestamp).toLocaleString()}</span>
+              <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                {new Date(tx.timestamp).toLocaleString()}
               </p>
             </div>
             <span
@@ -109,6 +105,25 @@ export default function TransactionLog({ transactions }: Props) {
       </div>
     </div>
   );
+}
+
+function formatItemList(items: { name: string; quantity: number }[]): string {
+  return items.map((i) => i.quantity > 1 ? `${i.quantity}x ${i.name}` : i.name).join(', ');
+}
+
+function formatExchange(tx: Transaction): string {
+  const gave: string[] = [];
+  const got: string[] = [];
+
+  if (tx.itemsGiven.length > 0) gave.push(formatItemList(tx.itemsGiven));
+  if (tx.goldGiven > 0) gave.push(formatGold(tx.goldGiven));
+  if (tx.itemsReceived.length > 0) got.push(formatItemList(tx.itemsReceived));
+  if (tx.goldReceived > 0) got.push(formatGold(tx.goldReceived));
+
+  const gaveStr = gave.length > 0 ? gave.join(' + ') : 'nothing';
+  const gotStr = got.length > 0 ? got.join(' + ') : 'nothing';
+
+  return `${gaveStr} \u2192 ${gotStr}`;
 }
 
 function formatGold(amount: number): string {

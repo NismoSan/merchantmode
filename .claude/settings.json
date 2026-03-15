@@ -64,10 +64,30 @@
       "Bash(taskkill //IM \"Merchant Mode.exe\" //F)",
       "Bash(git push:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(where magick:*)",
+      "Bash(where convert:*)",
+      "Bash(where ffmpeg:*)",
+      "Bash(npx --yes png-to-ico c:/Users/Third/MerchantMode/merchantmode/public/items/4529.png)",
+      "Bash(npx --yes png-to-ico public/items/4529.png)",
+      "Bash(npx --yes --package=sharp --package=png-to-ico -c \"node -e \"\":*)",
+      "Bash(npx --yes --package=sharp -c \"node -e \"\":*)",
+      "Bash(find /c/Users/Third/tracker -type f \\\\\\(-name *.json -o -name *.config -o -name *.env* -o -name *.txt \\\\\\))",
+      "Bash(find c:UsersThirddarkagestsdark-ages-tspackagesnetworksrcentities -type f -name *.ts)",
+      "Bash(grep -r \"websocket\\\\|ws\\\\|socket.io\" /c/Users/Third/AEofficial/copyofserver --include=*.ts --include=*.js)",
+      "Bash(grep -r \"PORT\\\\|HOST\\\\|DOMAIN\\\\|URL\" /c/Users/Third/AEofficial/*.json /c/Users/Third/AEofficial/.env*)",
+      "Bash(grep -r \"redis\\\\|createClient\" /c/Users/Third/AEofficial/copyofserver --include=*.ts)",
+      "Bash(xargs ls:*)",
+      "Bash(find c:/Users/Third/MerchantMode/merchantmode/src -name *.ts -o -name *.tsx)",
+      "Bash(find c:/Users/Third/MerchantMode/merchantmode/core -name *.ts)",
+      "Bash(find /c/Users/Third/AEofficial -type f \\\\\\(-name *sprite* -o -name *avatar* -o -name *image* \\\\\\))",
+      "Bash(curl -s https://api.aislingexchange.com/players/test/avatar)",
+      "Bash(curl -s https://api.aislingexchange.com/api/players/test/avatar)",
+      "Bash(curl -s https://api.aislingexchange.com/api/players/Kedian/sprite.png -o /dev/null -w \"%{http_code}\")"
     ],
     "additionalDirectories": [
-      "C:\\Users\\Third\\AEofficial\\public\\items"
+      "C:\\Users\\Third\\AEofficial\\public\\items",
+      "c:\\Users\\Third\\AEofficial\\copyofserver"
     ]
   }
 }

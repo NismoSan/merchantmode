@@ -9,6 +9,7 @@ import TransactionLog from './components/TransactionLog';
 import PacketSniffer from './components/PacketSniffer';
 import ConnectionStatus from './components/ConnectionStatus';
 import CharacterTabs from './components/CharacterTabs';
+import AllMerchantsView from './components/AllMerchantsView';
 import UpdateBanner from './components/UpdateBanner';
 
 type Page = 'dashboard' | 'listings' | 'whispers' | 'transactions' | 'sniffer' | 'settings' | 'about';
@@ -28,20 +29,27 @@ export default function App() {
   const [characters, setCharacters] = useState<string[]>([]);
   const [activeCharacter, setActiveCharacter] = useState<string | null>(null);
   const [characterStates, setCharacterStates] = useState<Record<string, string>>({});
+  const [characterTypes, setCharacterTypes] = useState<Record<string, 'launched' | 'bot'>>({});
   const [transactions, setTransactions] = useState<any[]>([]);
   const [snifferLog, setSnifferLog] = useState<any[]>([]);
   const [launching, setLaunching] = useState(false);
   const [launchError, setLaunchError] = useState('');
+  const [allMerchantsMode, setAllMerchantsMode] = useState(false);
+  const [allMerchants, setAllMerchants] = useState<GlobalMerchantData[]>([]);
 
   useEffect(() => {
     const api = window.merchantMode;
     if (!api) return;
 
     api.proxy.getStatus().then(setProxyStatus);
-    api.characters.list().then((chars) => {
-      setCharacters(chars);
-      if (chars.length > 0 && !activeCharacter) {
-        setActiveCharacter(chars[0]);
+    api.merchants.getAll().then(setAllMerchants);
+    api.merchants.onUpdated(setAllMerchants);
+    api.characters.list().then((entries) => {
+      const names = entries.map((e) => e.name);
+      setCharacters(names);
+      setCharacterTypes(Object.fromEntries(entries.map((e) => [e.name, e.connectionType])));
+      if (names.length > 0 && !activeCharacter) {
+        setActiveCharacter(names[0]);
       }
     });
     api.transactions.getAll().then(setTransactions);
@@ -49,12 +57,14 @@ export default function App() {
 
     api.proxy.onStatus(setProxyStatus);
 
-    api.characters.onConnected((name) => {
+    api.characters.onConnected((data) => {
       setCharacters((prev) => {
-        if (prev.includes(name)) return prev;
-        return [...prev, name];
+        if (prev.includes(data.name)) return prev;
+        return [...prev, data.name];
       });
-      setActiveCharacter((prev) => prev ?? name);
+      setCharacterTypes((prev) => ({ ...prev, [data.name]: data.connectionType }));
+      // Only auto-select if no character is active and not in all-merchants mode
+      setActiveCharacter((prev) => prev ?? data.name);
     });
 
     api.characters.onDisconnected((name) => {
@@ -64,6 +74,11 @@ export default function App() {
         return prev;
       });
       setCharacterStates((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      setCharacterTypes((prev) => {
         const next = { ...prev };
         delete next[name];
         return next;
@@ -92,10 +107,10 @@ export default function App() {
 
   // Auto-select first character if activeCharacter becomes null but characters exist
   useEffect(() => {
-    if (!activeCharacter && characters.length > 0) {
+    if (!activeCharacter && !allMerchantsMode && characters.length > 0) {
       setActiveCharacter(characters[0]);
     }
-  }, [characters, activeCharacter]);
+  }, [characters, activeCharacter, allMerchantsMode]);
 
   const engineState = activeCharacter ? (characterStates[activeCharacter] ?? 'IDLE') : 'IDLE';
 
@@ -110,7 +125,8 @@ export default function App() {
         }}
       >
         <div className="p-4 pb-3">
-          <h1 className="text-lg font-bold gold-text">
+          <h1 className="text-lg font-bold gold-text flex items-center gap-2">
+            <img src="items/4529.png" alt="" className="h-5 w-auto" style={{ imageRendering: 'pixelated' }} />
             Merchant Mode
           </h1>
           <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)', letterSpacing: '0.04em' }}>
@@ -172,6 +188,9 @@ export default function App() {
         </div>
 
         <div className="px-3 pb-4 space-y-3">
+          <div className="flex justify-center">
+            <ConnectionStatus proxyStatus={proxyStatus} engineState={engineState} />
+          </div>
           {/* Gradient separator */}
           <div
             style={{
@@ -201,7 +220,6 @@ export default function App() {
           {launchError && (
             <p className="text-xs" style={{ color: 'var(--color-danger)' }}>{launchError}</p>
           )}
-          <ConnectionStatus proxyStatus={proxyStatus} engineState={engineState} />
         </div>
       </nav>
 
@@ -213,13 +231,20 @@ export default function App() {
           <CharacterTabs
             characters={characters}
             activeCharacter={activeCharacter}
-            onSelect={setActiveCharacter}
+            onSelect={(name) => { setAllMerchantsMode(false); setActiveCharacter(name); }}
+            onSelectAll={() => { setAllMerchantsMode(true); setActiveCharacter(null); }}
+            isAllSelected={allMerchantsMode}
+            allMerchantsCount={allMerchants.length}
             characterStates={characterStates}
+            characterTypes={characterTypes}
           />
         )}
 
         <main className="flex-1 overflow-auto p-6">
-          {page === 'dashboard' && (
+          {page === 'dashboard' && allMerchantsMode && (
+            <AllMerchantsView merchants={allMerchants} proxyStatus={proxyStatus} />
+          )}
+          {page === 'dashboard' && !allMerchantsMode && (
             <Dashboard
               proxyStatus={proxyStatus}
               engineState={engineState}
@@ -227,22 +252,30 @@ export default function App() {
             />
           )}
           {page === 'listings' && (
-            <Listings characterName={activeCharacter} />
+            <Listings
+              characterName={activeCharacter}
+              allMerchantsMode={allMerchantsMode}
+              allMerchants={allMerchants}
+            />
           )}
           {page === 'whispers' && (
             <Whispers characters={characters} />
           )}
           {page === 'transactions' && (
-            <div className="space-y-4">
-              <h2 className="text-xl font-semibold gold-text">Transactions</h2>
-              <div
-                style={{
-                  width: 80,
-                  height: 1,
-                  background: 'linear-gradient(90deg, var(--color-gold-400), transparent)',
-                }}
-              />
-              <TransactionLog transactions={transactions} />
+            <div className="flex flex-col h-full">
+              <div className="space-y-4 pb-3">
+                <h2 className="text-xl font-semibold gold-text">Transactions</h2>
+                <div
+                  style={{
+                    width: 80,
+                    height: 1,
+                    background: 'linear-gradient(90deg, var(--color-gold-400), transparent)',
+                  }}
+                />
+              </div>
+              <div className="flex-1 min-h-0">
+                <TransactionLog transactions={transactions} />
+              </div>
             </div>
           )}
           {page === 'sniffer' && (

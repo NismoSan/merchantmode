@@ -9,8 +9,8 @@ contextBridge.exposeInMainWorld('merchantMode', {
     onStatus: (cb: (status: string) => void) => { ipcRenderer.on('proxy:status', (_e, s) => cb(s)); },
   },
   characters: {
-    list: () => ipcRenderer.invoke('characters:list') as Promise<string[]>,
-    onConnected: (cb: (name: string) => void) => { ipcRenderer.on('characters:connected', (_e, n) => cb(n)); },
+    list: () => ipcRenderer.invoke('characters:list') as Promise<{ name: string; connectionType: 'launched' | 'bot' }[]>,
+    onConnected: (cb: (data: { name: string; connectionType: 'launched' | 'bot' }) => void) => { ipcRenderer.on('characters:connected', (_e, d) => cb(d)); },
     onDisconnected: (cb: (name: string) => void) => { ipcRenderer.on('characters:disconnected', (_e, n) => cb(n)); },
   },
   engine: {
@@ -41,6 +41,14 @@ contextBridge.exposeInMainWorld('merchantMode', {
     onUpdate: (cb: (data: { characterName: string; items: any[] }) => void) => { ipcRenderer.on('inventory:update', (_e, d) => cb(d)); },
     onGoldUpdate: (cb: (data: { characterName: string; gold: number }) => void) => { ipcRenderer.on('inventory:gold-update', (_e, d) => cb(d)); },
   },
+  merchants: {
+    getAll: () => ipcRenderer.invoke('merchants:getAll'),
+    onUpdated: (cb: (merchants: any[]) => void) => { ipcRenderer.on('merchants:updated', (_e, d) => cb(d)); },
+  },
+  ae: {
+    getSprite: (name: string) => ipcRenderer.invoke('ae:sprite', name) as Promise<string | null>,
+    getAvatar: (name: string) => ipcRenderer.invoke('ae:avatar', name) as Promise<{ avatar_offset_x: number; avatar_offset_y: number; avatar_zoom: number } | null>,
+  },
   sniffer: {
     getLog: () => ipcRenderer.invoke('sniffer:getLog'),
   },
@@ -69,6 +77,7 @@ contextBridge.exposeInMainWorld('merchantMode', {
       'engine:exchange-updated', 'engine:exchange-cancelled',
       'engine:transaction', 'engine:validation-failed',
       'inventory:update', 'inventory:gold-update',
+      'merchants:updated',
       'updater:status',
     ];
     channels.forEach((ch) => ipcRenderer.removeAllListeners(ch));

@@ -9,6 +9,7 @@ interface Listing {
   quantity: number;
   quantityRemaining: number;
   status: 'ACTIVE' | 'SOLD_OUT' | 'PAUSED';
+  wantedItems?: { name: string; quantity: number }[];
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -59,6 +60,9 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
   const [notes, setNotes] = useState('');
   const [sellStack, setSellStack] = useState(false);
   const [stackSize, setStackSize] = useState('');
+  const [wantedItem, setWantedItem] = useState('');
+  const [wantedQty, setWantedQty] = useState('1');
+  const [tradeRepeats, setTradeRepeats] = useState('1');
 
   const api = window.merchantMode?.listings;
 
@@ -79,9 +83,20 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!api || !itemName.trim()) return;
+    if (type === 'TRADE' && !wantedItem.trim()) return;
 
     const parsedPrice = parsePrice(price);
     const parsedQty = parseInt(quantity) || 1;
+    const parsedWantedQty = parseInt(wantedQty) || 1;
+    const parsedRepeats = parseInt(tradeRepeats) || 1;
+    const tradeWanted = type === 'TRADE' && wantedItem.trim()
+      ? [{ name: wantedItem.trim(), quantity: parsedWantedQty }]
+      : undefined;
+
+    // For TRADE: quantity = per-trade offered amount, quantityRemaining = how many times to repeat
+    // For BUY/SELL: quantity = quantityRemaining = total units
+    const qty = parsedQty;
+    const qtyRemaining = type === 'TRADE' ? parsedRepeats : parsedQty;
 
     if (editId) {
       const existing = listings.find((l) => l.id === editId);
@@ -92,8 +107,9 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
           type,
           itemName: itemName.trim(),
           price: parsedPrice,
-          quantity: parsedQty,
-          quantityRemaining: parsedQty,
+          quantity: qty,
+          quantityRemaining: qtyRemaining,
+          wantedItems: tradeWanted,
           notes: notes.trim() || undefined,
           stackSize: sellStack ? (parseInt(stackSize) || 0) : undefined,
           updatedAt: new Date().toISOString(),
@@ -106,9 +122,10 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
         type,
         itemName: itemName.trim(),
         price: parsedPrice,
-        quantity: parsedQty,
-        quantityRemaining: parsedQty,
+        quantity: qty,
+        quantityRemaining: qtyRemaining,
         status: 'ACTIVE',
+        wantedItems: tradeWanted,
         notes: notes.trim() || undefined,
         stackSize: sellStack ? (parseInt(stackSize) || 0) : undefined,
         createdAt: new Date().toISOString(),
@@ -129,6 +146,9 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
     setNotes(listing.notes || '');
     setSellStack(!!listing.stackSize);
     setStackSize(listing.stackSize ? listing.stackSize.toString() : '');
+    setWantedItem(listing.wantedItems?.[0]?.name || '');
+    setWantedQty(listing.wantedItems?.[0]?.quantity?.toString() || '1');
+    setTradeRepeats(listing.type === 'TRADE' ? listing.quantityRemaining.toString() : '1');
     setShowForm(true);
   }
 
@@ -159,6 +179,9 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
     setNotes('');
     setSellStack(false);
     setStackSize('');
+    setWantedItem('');
+    setWantedQty('1');
+    setTradeRepeats('1');
   }
 
   return (
@@ -197,30 +220,86 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
               </button>
             ))}
           </div>
-          <input
-            type="text"
-            placeholder="Item name"
-            value={itemName}
-            onChange={(e) => setItemName(e.target.value)}
-            className="input-field block w-full"
-          />
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Price (e.g. 500k, 1.5m)"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              className="input-field flex-1"
-            />
-            <input
-              type="number"
-              placeholder="Qty"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              min="1"
-              className="input-field w-20"
-            />
-          </div>
+          {type === 'TRADE' ? (
+            <div className="space-y-2">
+              <p className="text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--color-text-tertiary)' }}>You give</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Item you are offering"
+                  value={itemName}
+                  onChange={(e) => setItemName(e.target.value)}
+                  className="input-field flex-1"
+                />
+                <input
+                  type="number"
+                  placeholder="Qty"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  min="1"
+                  className="input-field w-20"
+                />
+              </div>
+              <p className="text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--color-text-tertiary)' }}>You receive</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Item you want in return"
+                  value={wantedItem}
+                  onChange={(e) => setWantedItem(e.target.value)}
+                  className="input-field flex-1"
+                />
+                <input
+                  type="number"
+                  placeholder="Qty"
+                  value={wantedQty}
+                  onChange={(e) => setWantedQty(e.target.value)}
+                  min="1"
+                  className="input-field w-20"
+                />
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--color-text-tertiary)' }}>Repeat</span>
+                <input
+                  type="number"
+                  value={tradeRepeats}
+                  onChange={(e) => setTradeRepeats(e.target.value)}
+                  min="1"
+                  className="input-field w-20 py-1"
+                />
+                <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                  {parseInt(tradeRepeats) > 1 ? 'times' : 'time (closes after trade)'}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <>
+              <input
+                type="text"
+                placeholder="Item name"
+                value={itemName}
+                onChange={(e) => setItemName(e.target.value)}
+                className="input-field block w-full"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Price (e.g. 500k, 1.5m)"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  className="input-field flex-1"
+                />
+                <input
+                  type="number"
+                  placeholder="Qty"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  min="1"
+                  className="input-field w-20"
+                />
+              </div>
+            </>
+          )}
           {type === 'SELL' && (
             <div className="space-y-1">
               <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}>
@@ -300,14 +379,35 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
             })()}
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>
-                {listing.itemName}
-                {listing.stackSize && (
-                  <span className="ml-1 text-[10px] font-normal" style={{ color: 'var(--color-text-tertiary)' }}>[x{listing.stackSize}]</span>
+                {listing.type === 'TRADE' ? (
+                  <>
+                    {listing.quantity > 1 ? `${listing.quantity}x ` : ''}{listing.itemName}
+                    {listing.wantedItems?.[0] && (
+                      <span style={{ color: 'var(--color-warning)' }}>
+                        {' '}&#8594;{' '}
+                      </span>
+                    )}
+                    {listing.wantedItems?.[0] && (
+                      <>
+                        {listing.wantedItems[0].quantity > 1 ? `${listing.wantedItems[0].quantity}x ` : ''}{listing.wantedItems[0].name}
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {listing.itemName}
+                    {listing.stackSize && (
+                      <span className="ml-1 text-[10px] font-normal" style={{ color: 'var(--color-text-tertiary)' }}>[x{listing.stackSize}]</span>
+                    )}
+                  </>
                 )}
               </p>
               <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                {formatGold(listing.price)} | {listing.quantityRemaining}/{listing.quantity} remaining
-                {listing.status === 'SOLD_OUT' && <span style={{ color: 'var(--color-danger)' }}> SOLD OUT</span>}
+                {listing.type === 'TRADE'
+                  ? `${listing.quantityRemaining} trade${listing.quantityRemaining !== 1 ? 's' : ''} remaining`
+                  : <>{formatGold(listing.price)} | {listing.quantityRemaining}/{listing.quantity} remaining</>
+                }
+                {listing.status === 'SOLD_OUT' && <span style={{ color: 'var(--color-danger)' }}> {listing.type === 'TRADE' ? 'COMPLETED' : 'SOLD OUT'}</span>}
                 {listing.status === 'PAUSED' && <span style={{ color: 'var(--color-warning)' }}> PAUSED</span>}
               </p>
             </div>

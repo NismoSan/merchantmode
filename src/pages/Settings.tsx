@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Save, Check } from 'lucide-react';
+import { Save, Check, Copy } from 'lucide-react';
 
 export default function Settings() {
   const [clientPath, setClientPath] = useState('');
   const [replyAvailable, setReplyAvailable] = useState('');
   const [replyNotFound, setReplyNotFound] = useState('');
   const [replyBuying, setReplyBuying] = useState('');
+  const [replyTrade, setReplyTrade] = useState('');
   const [exchangeTimeout, setExchangeTimeout] = useState('60');
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const api = window.merchantMode;
@@ -18,6 +20,7 @@ export default function Settings() {
     api.settings.get('reply_available', 'I have {item} for {price}. Open exchange with me to buy.').then(setReplyAvailable);
     api.settings.get('reply_not_found', "Sorry, I don't have that item for sale.").then(setReplyNotFound);
     api.settings.get('reply_buying', 'I am buying {item} for {price}. Open exchange with me to sell.').then(setReplyBuying);
+    api.settings.get('reply_trade', 'I will trade {item} for {wanted}. Open exchange with me.').then(setReplyTrade);
     api.settings.get('exchange_timeout', '60').then(setExchangeTimeout);
     api.settings.get('auto_reply_enabled', 'true').then((v) => setAutoReplyEnabled(v === 'true'));
   }, []);
@@ -30,6 +33,7 @@ export default function Settings() {
     await api.set('reply_available', replyAvailable);
     await api.set('reply_not_found', replyNotFound);
     await api.set('reply_buying', replyBuying);
+    await api.set('reply_trade', replyTrade);
     await api.set('exchange_timeout', exchangeTimeout);
     if (clientPath) {
       const launcher = window.merchantMode?.settings;
@@ -94,7 +98,37 @@ export default function Settings() {
           </div>
         </label>
         <Field label="Server" value="da0.kru.com:2610" disabled />
-        <Field label="Local Proxy Port" value="2610" disabled />
+        <Field label="Local Proxy Port" value="2615" disabled />
+      </Section>
+
+      <Section title="Bot Clients">
+        <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+          Configure your bot client to connect to the address below instead of the game server. Bot clients are detected automatically when they connect.
+        </p>
+        <label className="block">
+          <span className="text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--color-text-secondary)' }}>
+            Proxy Address
+          </span>
+          <div className="flex gap-2 mt-1">
+            <input
+              type="text"
+              value="localhost:2615"
+              disabled
+              className="input-field flex-1"
+            />
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText('localhost:2615');
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+              className="btn-secondary px-3 py-2 rounded-md text-sm flex items-center gap-1"
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </label>
       </Section>
 
       <Section title="Auto-Reply Whispers">
@@ -132,7 +166,7 @@ export default function Settings() {
         {autoReplyEnabled && (
           <div className="space-y-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--color-surface-500)' }}>
             <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-              Use {'{item}'} and {'{price}'} as placeholders.
+              Use {'{item}'}, {'{price}'}, and {'{wanted}'} (trade) as placeholders.
             </p>
             <Field
               label="Item available (selling)"
@@ -148,6 +182,11 @@ export default function Settings() {
               label="Buying reply"
               value={replyBuying}
               onChange={setReplyBuying}
+            />
+            <Field
+              label="Trade reply"
+              value={replyTrade}
+              onChange={setReplyTrade}
             />
           </div>
         )}

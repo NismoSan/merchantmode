@@ -9,8 +9,8 @@ interface MerchantModeAPI {
     onStatus: (cb: (status: string) => void) => void;
   };
   characters: {
-    list: () => Promise<string[]>;
-    onConnected: (cb: (name: string) => void) => void;
+    list: () => Promise<{ name: string; connectionType: 'launched' | 'bot' }[]>;
+    onConnected: (cb: (data: { name: string; connectionType: 'launched' | 'bot' }) => void) => void;
     onDisconnected: (cb: (name: string) => void) => void;
   };
   engine: {
@@ -41,6 +41,14 @@ interface MerchantModeAPI {
     onUpdate: (cb: (data: { characterName: string; items: any[] }) => void) => void;
     onGoldUpdate: (cb: (data: { characterName: string; gold: number }) => void) => void;
   };
+  merchants: {
+    getAll: () => Promise<GlobalMerchantData[]>;
+    onUpdated: (cb: (merchants: GlobalMerchantData[]) => void) => void;
+  };
+  ae: {
+    getSprite: (name: string) => Promise<string | null>;
+    getAvatar: (name: string) => Promise<{ avatar_offset_x: number; avatar_offset_y: number; avatar_zoom: number } | null>;
+  };
   sniffer: {
     getLog: () => Promise<any[]>;
   };
@@ -63,6 +71,21 @@ interface MerchantModeAPI {
 }
 
 declare global {
+  interface GlobalMerchantListing {
+    type: string;
+    itemName: string;
+    price: number;
+    status: string;
+  }
+
+  interface GlobalMerchantData {
+    name: string;
+    mapName: string;
+    x: number;
+    y: number;
+    listings: GlobalMerchantListing[];
+  }
+
   interface Window {
     merchantMode: MerchantModeAPI;
   }
