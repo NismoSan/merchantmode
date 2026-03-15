@@ -252,4 +252,9 @@ export default function App() {
             </div>
           )}
           {page === 'settings' && <Settings />}
-          
+          {page === 'about' && <About />}
+        </main>
+      </div>
+    </div>
+  );
+}

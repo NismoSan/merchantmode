@@ -4,3 +4,4 @@ dist-electron/
 *.db
 *.sqlite
 .env
+release/

@@ -7,7 +7,7 @@
    - Generate a new token with the `repo` scope
 2. Set the token as an environment variable before running the build:
    ```
-   set GH_TOKEN=ghp_your_token_here
+   set GH_TOKEN=
    ```
 
 ## Steps

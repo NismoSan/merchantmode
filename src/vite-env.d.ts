@@ -48,6 +48,12 @@ interface MerchantModeAPI {
     get: (key: string, defaultValue?: string) => Promise<string>;
     set: (key: string, value: string) => Promise<void>;
   };
+  updater: {
+    check: () => Promise<void>;
+    install: () => void;
+    getVersion: () => Promise<string>;
+    onStatus: (cb: (data: { status: string; version?: string; percent?: number; message?: string }) => void) => void;
+  };
   launcher: {
     launch: () => Promise<{ success: boolean; processId?: number; error?: string }>;
     browse: () => Promise<string | null>;
