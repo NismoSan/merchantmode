@@ -87,7 +87,15 @@
       "Bash(ls -1 /c/Users/Third/MerchantMode/merchantmode/public/items/*.png)",
       "Bash(grep -E \"\\\\.\\(ts|tsx|json\\)$\")",
       "Bash(grep -E \"\\\\.\\(json|ts|tsx|js\\)$\")",
-      "Bash(grep \"\\\\.png$\")"
+      "Bash(grep \"\\\\.png$\")",
+      "Bash(find /c/Users/Third/MerchantMode/merchantmode -type f -name .env* -o -name *.pem -o -name *.key -o -name *.crt -o -name secrets*)",
+      "Bash(grep -E \"\\\\.\\(env|pem|key|crt|p12|pfx\\)$\")",
+      "Bash(find . -maxdepth 2 -name .env* -o -name *secret* -o -name *credential*)",
+      "Bash(git rev-list:*)",
+      "Bash(grep -r thirdbrody@gmail.com /c/Users/Third/MerchantMode/merchantmode --include=*.ts --include=*.tsx --include=*.json --include=*.md)",
+      "Bash(git status:*)",
+      "Bash(find /c/Users/Third/MerchantMode/merchantmode -name *.db -o -name *.sqlite)",
+      "Bash(git check-ignore:*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Third\\AEofficial\\public\\items",
