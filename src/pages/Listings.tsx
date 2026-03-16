@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Monitor, Tag, ShoppingBag, ArrowLeftRight, MapPin } from 'lucide-react';
+import { Monitor, Tag, ShoppingBag, ArrowLeftRight, MapPin, List, Download, Globe } from 'lucide-react';
 import ListingManager from '../components/ListingManager';
 import type { PrefillItem } from '../components/ListingManager';
 import { getSpriteDataUrl, getAvatarData, type AvatarData } from '../lib/ae-api';
@@ -16,6 +16,9 @@ interface Props {
 export default function Listings({ characterName, prefillItem, onPrefillConsumed, allMerchantsMode, allMerchants }: Props) {
   const [listings, setListings] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const [aeLoggedIn, setAeLoggedIn] = useState(false);
 
   useEffect(() => {
     const api = window.merchantMode;
@@ -27,6 +30,7 @@ export default function Listings({ characterName, prefillItem, onPrefillConsumed
 
     loadListings();
     api.inventory.get(characterName).then(setInventory);
+    api.ae.getAuthStatus().then(s => setAeLoggedIn(s.loggedIn)).catch(() => {});
 
     const handleTransaction = (tx: any) => {
       if (!tx.characterName || tx.characterName === characterName) {
@@ -40,8 +44,16 @@ export default function Listings({ characterName, prefillItem, onPrefillConsumed
       }
     };
 
+    const handleListingsChanged = (data: any) => {
+      if (data.characterName === characterName) {
+        loadListings();
+      }
+    };
+
     api.engine.onTransaction(handleTransaction);
     api.inventory.onUpdate(handleInventoryUpdate);
+    api.listings.onChanged(handleListingsChanged);
+    api.ae.onAuthChanged(s => setAeLoggedIn(s.loggedIn));
 
     // Don't call removeAllListeners — it kills App-level listeners
   }, [characterName]);
@@ -53,19 +65,38 @@ export default function Listings({ characterName, prefillItem, onPrefillConsumed
     setListings(all);
   }
 
+  async function handleImportFromAE() {
+    if (!characterName || importing) return;
+    setImporting(true);
+    setImportResult(null);
+    const result = await window.merchantMode?.ae.importListings(characterName);
+    if (result?.error) {
+      setImportResult(result.error);
+    } else if (result?.imported === 0) {
+      setImportResult('All AE listings are already imported');
+    } else {
+      setImportResult(`Imported ${result?.imported} listing${result?.imported === 1 ? '' : 's'} from AE`);
+      loadListings();
+    }
+    setImporting(false);
+    setTimeout(() => setImportResult(null), 4000);
+  }
+
   if (allMerchantsMode && allMerchants) {
     return <AllMerchantsListings merchants={allMerchants} />;
   }
 
   if (!characterName) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 animate-fade-in">
-        <Monitor size={48} style={{ color: 'var(--color-gold-600)' }} />
+      <div className="empty-state animate-fade-in" style={{ height: '100%' }}>
+        <div className="empty-state-icon">
+          <Monitor size={24} style={{ color: 'var(--color-gold-400)' }} />
+        </div>
         <div className="text-center">
-          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
             No character selected
           </p>
-          <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>
+          <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--color-text-tertiary)' }}>
             Launch a client to get started.
           </p>
         </div>
@@ -74,32 +105,53 @@ export default function Listings({ characterName, prefillItem, onPrefillConsumed
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold">
-          <span className="gold-text">Listings</span>
-          <span className="ml-2 text-base font-normal" style={{ color: 'var(--color-text-secondary)' }}>
-            — {characterName}
-          </span>
-        </h2>
-        <div
-          className="mt-2"
-          style={{
-            width: 80,
-            height: 1,
-            background: 'linear-gradient(90deg, var(--color-gold-400), transparent)',
-          }}
-        />
+    <div className="space-y-5">
+      {/* Hero */}
+      <div className="page-hero animate-fade-in">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div className="page-hero-icon">
+            <List size={22} style={{ color: 'var(--color-gold-400)' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <h1 className="page-hero-title">Listings</h1>
+            <p className="page-hero-subtitle">{characterName}</p>
+          </div>
+          {aeLoggedIn && (
+            <button
+              onClick={handleImportFromAE}
+              disabled={importing}
+              className="btn-secondary px-4 py-2 rounded-lg text-xs flex items-center gap-1.5"
+              style={{ opacity: importing ? 0.6 : 1 }}
+              title="Refresh listings from AislingExchange"
+            >
+              <Globe size={13} />
+              {importing ? 'Syncing...' : 'Sync AE'}
+            </button>
+          )}
+        </div>
+        {importResult && (
+          <p style={{
+            margin: '8px 0 0',
+            fontSize: 11,
+            color: importResult.includes('Error') || importResult.includes('error')
+              ? 'var(--color-danger)'
+              : 'var(--color-success)',
+          }}>
+            {importResult}
+          </p>
+        )}
       </div>
 
-      <ListingManager
-        listings={listings}
-        onRefresh={loadListings}
-        characterName={characterName}
-        prefillItem={prefillItem}
-        onPrefillConsumed={onPrefillConsumed}
-        inventory={inventory}
-      />
+      <div className="animate-slide-up" style={{ animationDelay: '80ms' }}>
+        <ListingManager
+          listings={listings}
+          onRefresh={loadListings}
+          characterName={characterName}
+          prefillItem={prefillItem}
+          onPrefillConsumed={onPrefillConsumed}
+          inventory={inventory}
+        />
+      </div>
     </div>
   );
 }
@@ -119,7 +171,12 @@ function MerchantAvatar({ name }: { name: string }) {
     return (
       <div
         className="flex-shrink-0 rounded-full flex items-center justify-center"
-        style={{ width: 28, height: 28, background: 'var(--color-surface-400)' }}
+        style={{
+          width: 28,
+          height: 28,
+          background: 'linear-gradient(135deg, rgba(201,168,76,0.12), rgba(201,168,76,0.04))',
+          border: '1px solid rgba(201,168,76,0.15)',
+        }}
       >
         <User size={14} style={{ color: 'var(--color-gold-600)', opacity: 0.7 }} />
       </div>
@@ -137,7 +194,7 @@ function MerchantAvatar({ name }: { name: string }) {
         backgroundPosition: `${avatar?.offsetX ?? 50}% ${avatar?.offsetY ?? 20}%`,
         backgroundRepeat: 'no-repeat',
         imageRendering: 'pixelated',
-        border: '1px solid var(--color-gold-600)',
+        border: '1px solid rgba(201,168,76,0.3)',
       }}
     />
   );
@@ -150,7 +207,6 @@ const TYPE_STYLES: Record<string, { bg: string; color: string; icon: typeof Tag 
 };
 
 function AllMerchantsListings({ merchants }: { merchants: GlobalMerchantData[] }) {
-  // Flatten all merchants' listings with merchant info attached
   const allListings = merchants.flatMap((m) =>
     m.listings.map((l) => ({
       ...l,
@@ -161,44 +217,52 @@ function AllMerchantsListings({ merchants }: { merchants: GlobalMerchantData[] }
     }))
   );
 
-  // Group by type for display
   const sellListings = allListings.filter((l) => l.type === 'SELL');
   const buyListings = allListings.filter((l) => l.type === 'BUY');
   const tradeListings = allListings.filter((l) => l.type === 'TRADE');
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold">
-          <span className="gold-text">All Merchant Listings</span>
-          <span className="ml-2 text-base font-normal" style={{ color: 'var(--color-text-secondary)' }}>
-            — {allListings.length} listings from {merchants.length} merchants
-          </span>
-        </h2>
-        <div
-          className="mt-2"
-          style={{
-            width: 80,
-            height: 1,
-            background: 'linear-gradient(90deg, var(--color-gold-400), transparent)',
-          }}
-        />
+    <div className="space-y-5">
+      {/* Hero */}
+      <div className="page-hero animate-fade-in">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div className="page-hero-icon">
+            <List size={22} style={{ color: 'var(--color-gold-400)' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <h1 className="page-hero-title">All Merchant Listings</h1>
+            <p className="page-hero-subtitle">
+              {allListings.length} listings from {merchants.length} merchants
+            </p>
+          </div>
+        </div>
       </div>
 
       {allListings.length === 0 ? (
-        <div className="card p-6 text-center animate-fade-in" style={{ color: 'var(--color-text-tertiary)' }}>
-          <p className="text-sm">No listings from any merchants right now.</p>
+        <div className="empty-state section-card animate-slide-up" style={{ animationDelay: '80ms' }}>
+          <div className="empty-state-icon">
+            <List size={24} style={{ color: 'var(--color-text-tertiary)' }} />
+          </div>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-tertiary)' }}>
+            No listings from any merchants right now.
+          </p>
         </div>
       ) : (
         <div className="space-y-4">
           {sellListings.length > 0 && (
-            <ListingSection label="Selling" type="SELL" listings={sellListings} />
+            <div className="animate-slide-up" style={{ animationDelay: '80ms' }}>
+              <ListingSection label="Selling" type="SELL" listings={sellListings} />
+            </div>
           )}
           {buyListings.length > 0 && (
-            <ListingSection label="Buying" type="BUY" listings={buyListings} />
+            <div className="animate-slide-up" style={{ animationDelay: '140ms' }}>
+              <ListingSection label="Buying" type="BUY" listings={buyListings} />
+            </div>
           )}
           {tradeListings.length > 0 && (
-            <ListingSection label="Trading" type="TRADE" listings={tradeListings} />
+            <div className="animate-slide-up" style={{ animationDelay: '200ms' }}>
+              <ListingSection label="Trading" type="TRADE" listings={tradeListings} />
+            </div>
           )}
         </div>
       )}
@@ -221,16 +285,16 @@ function ListingSection({ label, type, listings }: { label: string; type: string
     <div>
       <div className="flex items-center gap-2 mb-2">
         <Icon size={14} style={{ color: style.color }} />
-        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: style.color }}>
+        <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: style.color }}>
           {label}
         </span>
-        <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+        <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
           ({listings.length})
         </span>
       </div>
       <div className="space-y-1.5">
         {listings.map((l, i) => (
-          <div key={`${l.merchantName}-${l.itemName}-${i}`} className="card-inset flex items-center gap-3 p-3">
+          <div key={`${l.merchantName}-${l.itemName}-${i}`} className="card-inset listing-row flex items-center gap-3 p-3">
             <span
               className="badge flex-shrink-0"
               style={{ background: style.bg, color: style.color }}
@@ -239,14 +303,44 @@ function ListingSection({ label, type, listings }: { label: string; type: string
             </span>
             <MerchantAvatar name={l.merchantName} />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>
-                {l.itemName}
-                {l.price > 0 && (
-                  <span className="ml-2" style={{ color: 'var(--color-gold-400)' }}>
-                    {formatGold(l.price)}
-                  </span>
+              <p className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                {l.type === 'TRADE' ? (
+                  <>
+                    {l.quantity && l.quantity > 1 ? `${l.quantity}x ` : ''}{l.itemName}
+                    <span style={{ color: style.color }} className="mx-1">&#8594;</span>
+                    {l.wantedItems?.[0] ? (
+                      <>{l.wantedItems[0].quantity > 1 ? `${l.wantedItems[0].quantity}x ` : ''}{l.wantedItems[0].name}</>
+                    ) : '???'}
+                    {l.quantityRemaining !== undefined && l.quantityRemaining > 1 && (
+                      <span className="ml-2 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                        ({l.quantityRemaining} trades left)
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {l.itemName}
+                    {l.stackSize ? (
+                      <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}> [x{l.stackSize}]</span>
+                    ) : null}
+                    {l.price > 0 && (
+                      <span className="ml-2" style={{ color: 'var(--color-gold-400)' }}>
+                        {formatGold(l.price)}{l.stackSize ? '/stack' : ''}
+                      </span>
+                    )}
+                    {l.quantityRemaining !== undefined && l.quantity !== undefined && (
+                      <span className="ml-2 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                        {l.quantityRemaining}/{l.quantity} remaining
+                      </span>
+                    )}
+                  </>
                 )}
               </p>
+              {l.notes && (
+                <p className="text-xs truncate" style={{ color: 'var(--color-text-tertiary)' }}>
+                  {l.notes}
+                </p>
+              )}
               <p className="text-xs flex items-center gap-1.5" style={{ color: 'var(--color-text-secondary)' }}>
                 <span className="gold-text font-medium">{l.merchantName}</span>
                 <span style={{ color: 'var(--color-text-tertiary)' }}>·</span>

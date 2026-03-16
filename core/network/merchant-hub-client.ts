@@ -1,11 +1,23 @@
 import { EventEmitter } from 'events';
 
+export interface HubListing {
+  type: string;
+  itemName: string;
+  price: number;
+  status: string;
+  quantity?: number;
+  quantityRemaining?: number;
+  stackSize?: number;
+  wantedItems?: { name: string; quantity: number }[];
+  notes?: string;
+}
+
 export interface GlobalMerchant {
   name: string;
   mapName: string;
   x: number;
   y: number;
-  listings: { type: string; itemName: string; price: number; status: string }[];
+  listings: HubListing[];
 }
 
 export interface MerchantHubCharacter {
@@ -13,7 +25,7 @@ export interface MerchantHubCharacter {
   mapName: string;
   x: number;
   y: number;
-  listings: { type: string; itemName: string; price: number; status: string }[];
+  listings: HubListing[];
 }
 
 const HUB_URL = 'wss://api.aislingexchange.com/ws/merchants';

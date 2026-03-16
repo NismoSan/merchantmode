@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Package } from 'lucide-react';
+import { Package, Plus, X as XIcon, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
+import ItemAutocomplete from './ItemAutocomplete';
 
 interface Listing {
   id: string;
@@ -14,6 +15,7 @@ interface Listing {
   createdAt: string;
   updatedAt: string;
   stackSize?: number;
+  syncToAe?: boolean;
 }
 
 export interface PrefillItem {
@@ -63,10 +65,19 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
   const [wantedItem, setWantedItem] = useState('');
   const [wantedQty, setWantedQty] = useState('1');
   const [tradeRepeats, setTradeRepeats] = useState('1');
+  const [syncToAe, setSyncToAe] = useState(true);
+
+  const [syncStatuses, setSyncStatuses] = useState<Record<string, string>>({});
 
   const api = window.merchantMode?.listings;
 
-  // Handle prefill from inventory click
+  // Fetch sync statuses when listings change
+  useEffect(() => {
+    const ids = listings.map(l => l.id);
+    if (ids.length === 0) return;
+    window.merchantMode?.ae.getSyncStatuses(ids).then(setSyncStatuses).catch(() => {});
+  }, [listings]);
+
   useEffect(() => {
     if (prefillItem) {
       resetForm();
@@ -93,8 +104,6 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
       ? [{ name: wantedItem.trim(), quantity: parsedWantedQty }]
       : undefined;
 
-    // For TRADE: quantity = per-trade offered amount, quantityRemaining = how many times to repeat
-    // For BUY/SELL: quantity = quantityRemaining = total units
     const qty = parsedQty;
     const qtyRemaining = type === 'TRADE' ? parsedRepeats : parsedQty;
 
@@ -112,6 +121,7 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
           wantedItems: tradeWanted,
           notes: notes.trim() || undefined,
           stackSize: sellStack ? (parseInt(stackSize) || 0) : undefined,
+          syncToAe,
           updatedAt: new Date().toISOString(),
         });
       }
@@ -128,6 +138,7 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
         wantedItems: tradeWanted,
         notes: notes.trim() || undefined,
         stackSize: sellStack ? (parseInt(stackSize) || 0) : undefined,
+        syncToAe,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -149,6 +160,7 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
     setWantedItem(listing.wantedItems?.[0]?.name || '');
     setWantedQty(listing.wantedItems?.[0]?.quantity?.toString() || '1');
     setTradeRepeats(listing.type === 'TRADE' ? listing.quantityRemaining.toString() : '1');
+    setSyncToAe(listing.syncToAe !== false);
     setShowForm(true);
   }
 
@@ -182,175 +194,143 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
     setWantedItem('');
     setWantedQty('1');
     setTradeRepeats('1');
+    setSyncToAe(true);
   }
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <span className="stat-label">
-          Listings <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 400 }}>({listings.filter((l) => l.status === 'ACTIVE').length} active)</span>
-        </span>
+        <div className="section-header" style={{ marginBottom: 0 }}>
+          <Package size={16} className="section-icon" />
+          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }} className="gold-text">Listings</h3>
+          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 400 }}>
+            ({listings.filter((l) => l.status === 'ACTIVE').length} active)
+          </span>
+        </div>
         <button
           onClick={() => { resetForm(); setShowForm(!showForm); }}
-          className={`px-3 py-1 rounded-md text-xs font-medium ${showForm ? 'btn-secondary' : 'btn-primary'}`}
+          className={showForm ? 'btn-secondary' : 'btn-primary'}
+          style={{
+            padding: '7px 14px',
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 600,
+          }}
         >
-          {showForm ? 'Cancel' : '+ New Listing'}
+          {showForm ? (
+            <><XIcon size={13} /> Cancel</>
+          ) : (
+            <><Plus size={13} /> New Listing</>
+          )}
         </button>
       </div>
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="card-inset p-3 space-y-2 animate-fade-in">
-          <div className="flex gap-2">
-            {(['SELL', 'BUY', 'TRADE'] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setType(t)}
-                className="px-3 py-1 rounded-md text-xs font-medium"
-                style={{
-                  background: type === t
-                    ? 'linear-gradient(135deg, #dbb85e, #b8973e)'
-                    : 'var(--color-surface-400)',
-                  color: type === t ? 'var(--color-surface-50)' : 'var(--color-text-secondary)',
-                  border: type === t ? 'none' : '1px solid var(--color-surface-500)',
-                  transition: 'all 200ms ease',
-                }}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-          {type === 'TRADE' ? (
-            <div className="space-y-2">
-              <p className="text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--color-text-tertiary)' }}>You give</p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Item you are offering"
-                  value={itemName}
-                  onChange={(e) => setItemName(e.target.value)}
-                  className="input-field flex-1"
-                />
-                <input
-                  type="number"
-                  placeholder="Qty"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  min="1"
-                  className="input-field w-20"
-                />
-              </div>
-              <p className="text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--color-text-tertiary)' }}>You receive</p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Item you want in return"
-                  value={wantedItem}
-                  onChange={(e) => setWantedItem(e.target.value)}
-                  className="input-field flex-1"
-                />
-                <input
-                  type="number"
-                  placeholder="Qty"
-                  value={wantedQty}
-                  onChange={(e) => setWantedQty(e.target.value)}
-                  min="1"
-                  className="input-field w-20"
-                />
-              </div>
-              <div className="flex items-center gap-2 pt-1">
-                <span className="text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--color-text-tertiary)' }}>Repeat</span>
-                <input
-                  type="number"
-                  value={tradeRepeats}
-                  onChange={(e) => setTradeRepeats(e.target.value)}
-                  min="1"
-                  className="input-field w-20 py-1"
-                />
-                <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-                  {parseInt(tradeRepeats) > 1 ? 'times' : 'time (closes after trade)'}
-                </span>
-              </div>
+        <form onSubmit={handleSubmit} className="animate-slide-up" style={{
+          padding: '16px 18px',
+          borderRadius: 10,
+          background: 'var(--color-surface-200)',
+          border: '1px solid var(--color-surface-500)',
+        }}>
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              {(['SELL', 'BUY', 'TRADE'] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setType(t)}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    background: type === t
+                      ? 'linear-gradient(135deg, #dbb85e, #b8973e)'
+                      : 'var(--color-surface-400)',
+                    color: type === t ? 'var(--color-surface-50)' : 'var(--color-text-secondary)',
+                    border: type === t ? 'none' : '1px solid var(--color-surface-500)',
+                    cursor: 'pointer',
+                    transition: 'all 200ms ease',
+                  }}
+                >
+                  {t}
+                </button>
+              ))}
             </div>
-          ) : (
-            <>
-              <input
-                type="text"
-                placeholder="Item name"
-                value={itemName}
-                onChange={(e) => setItemName(e.target.value)}
-                className="input-field block w-full"
-              />
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Price (e.g. 500k, 1.5m)"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  className="input-field flex-1"
-                />
-                <input
-                  type="number"
-                  placeholder="Qty"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  min="1"
-                  className="input-field w-20"
-                />
-              </div>
-            </>
-          )}
-          {type === 'SELL' && (
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}>
-                <input
-                  type="checkbox"
-                  checked={sellStack}
-                  onChange={(e) => { setSellStack(e.target.checked); if (!e.target.checked) setStackSize(''); }}
-                  className="rounded"
-                  style={{ accentColor: 'var(--color-gold-400)' }}
-                />
-                Sell as stack
-              </label>
-              {sellStack && (
-                <div className="flex items-center gap-2 pl-5">
-                  <input
-                    type="number"
-                    placeholder="Stack size"
-                    value={stackSize}
-                    onChange={(e) => setStackSize(e.target.value)}
-                    min="1"
-                    className="input-field w-28 py-1"
-                  />
-                  <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>per trade</span>
+            {type === 'TRADE' ? (
+              <div className="space-y-2">
+                <p className="stat-label" style={{ margin: 0 }}>You give</p>
+                <div className="flex gap-2">
+                  <ItemAutocomplete value={itemName} onChange={setItemName} placeholder="Item you are offering" className="input-field flex-1" />
+                  <input type="number" placeholder="Qty" value={quantity} onChange={(e) => setQuantity(e.target.value)} min="1" className="input-field w-20" />
                 </div>
-              )}
-            </div>
-          )}
-          <input
-            type="text"
-            placeholder="Notes (optional)"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            className="input-field block w-full"
-          />
-          <button type="submit" className="btn-primary px-4 py-2 rounded-md text-xs">
-            {editId ? 'Update Listing' : 'Create Listing'}
-          </button>
+                <p className="stat-label" style={{ margin: 0 }}>You receive</p>
+                <div className="flex gap-2">
+                  <ItemAutocomplete value={wantedItem} onChange={setWantedItem} placeholder="Item you want in return" className="input-field flex-1" />
+                  <input type="number" placeholder="Qty" value={wantedQty} onChange={(e) => setWantedQty(e.target.value)} min="1" className="input-field w-20" />
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="stat-label" style={{ margin: 0 }}>Repeat</span>
+                  <input type="number" value={tradeRepeats} onChange={(e) => setTradeRepeats(e.target.value)} min="1" className="input-field w-20 py-1" />
+                  <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                    {parseInt(tradeRepeats) > 1 ? 'times' : 'time (closes after trade)'}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <>
+                <ItemAutocomplete value={itemName} onChange={setItemName} placeholder="Item name" className="input-field block w-full" />
+                <div className="flex gap-2">
+                  <input type="text" placeholder="Price (e.g. 500k, 1.5m)" value={price} onChange={(e) => setPrice(e.target.value)} className="input-field flex-1" />
+                  <input type="number" placeholder="Qty" value={quantity} onChange={(e) => setQuantity(e.target.value)} min="1" className="input-field w-20" />
+                </div>
+              </>
+            )}
+            {type === 'SELL' && (
+              <div className="space-y-1">
+                <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}>
+                  <input type="checkbox" checked={sellStack} onChange={(e) => { setSellStack(e.target.checked); if (!e.target.checked) setStackSize(''); }} style={{ accentColor: 'var(--color-gold-400)' }} />
+                  Sell as stack
+                </label>
+                {sellStack && (
+                  <div className="flex items-center gap-2 pl-5">
+                    <input type="number" placeholder="Stack size" value={stackSize} onChange={(e) => setStackSize(e.target.value)} min="1" className="input-field w-28 py-1" />
+                    <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>per trade</span>
+                  </div>
+                )}
+              </div>
+            )}
+            <input type="text" placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} className="input-field block w-full" />
+            <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}>
+              <input
+                type="checkbox"
+                checked={syncToAe}
+                onChange={(e) => setSyncToAe(e.target.checked)}
+                style={{ accentColor: 'var(--color-gold-400)' }}
+              />
+              Sync to AislingExchange
+            </label>
+            <button type="submit" className="btn-primary px-5 py-2.5 rounded-lg text-xs w-full">
+              {editId ? 'Update Listing' : 'Create Listing'}
+            </button>
+          </div>
         </form>
       )}
 
       <div className="space-y-2">
         {listings.length === 0 && (
-          <div className="flex flex-col items-center gap-2 py-6">
-            <Package size={32} style={{ color: 'var(--color-text-tertiary)' }} />
-            <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>No listings yet.</p>
+          <div className="empty-state" style={{ paddingTop: 32, paddingBottom: 32 }}>
+            <div className="empty-state-icon" style={{ width: 44, height: 44, borderRadius: 12 }}>
+              <Package size={20} style={{ color: 'var(--color-text-tertiary)' }} />
+            </div>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-tertiary)' }}>No listings yet.</p>
           </div>
         )}
         {listings.map((listing) => (
           <div
             key={listing.id}
-            className="card-inset flex items-center gap-3 p-3"
+            className="card-inset listing-row flex items-center gap-3 p-3"
             style={{
               opacity: listing.status === 'PAUSED' ? 0.6 : 1,
               filter: listing.status === 'PAUSED' ? 'grayscale(0.3)' : 'none',
@@ -368,17 +348,28 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
             {(() => {
               const spriteUrl = getSpriteUrl(listing.itemName, inventory);
               return spriteUrl ? (
-                <img
-                  src={spriteUrl}
-                  alt=""
-                  style={{ imageRendering: 'pixelated', width: 28, height: 28, flexShrink: 0 }}
-                  draggable={false}
-                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                />
+                <div style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 6,
+                  background: 'var(--color-surface-300)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}>
+                  <img
+                    src={spriteUrl}
+                    alt=""
+                    style={{ imageRendering: 'pixelated', width: 28, height: 28 }}
+                    draggable={false}
+                    onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none'; }}
+                  />
+                </div>
               ) : null;
             })()}
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>
+              <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)' }} className="truncate">
                 {listing.type === 'TRADE' ? (
                   <>
                     {listing.quantity > 1 ? `${listing.quantity}x ` : ''}{listing.itemName}
@@ -397,44 +388,69 @@ export default function ListingManager({ listings, onRefresh, characterName, pre
                   <>
                     {listing.itemName}
                     {listing.stackSize && (
-                      <span className="ml-1 text-[10px] font-normal" style={{ color: 'var(--color-text-tertiary)' }}>[x{listing.stackSize}]</span>
+                      <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--color-text-tertiary)', marginLeft: 4 }}>[x{listing.stackSize}]</span>
                     )}
                   </>
                 )}
               </p>
-              <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+              <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--color-text-secondary)' }}>
                 {listing.type === 'TRADE'
                   ? `${listing.quantityRemaining} trade${listing.quantityRemaining !== 1 ? 's' : ''} remaining`
                   : <>{formatGold(listing.price)} | {listing.quantityRemaining}/{listing.quantity} remaining</>
                 }
                 {listing.status === 'SOLD_OUT' && <span style={{ color: 'var(--color-danger)' }}> {listing.type === 'TRADE' ? 'COMPLETED' : 'SOLD OUT'}</span>}
-                {listing.status === 'PAUSED' && <span style={{ color: 'var(--color-warning)' }}> PAUSED</span>}
+                {listing.status === 'PAUSED' && syncStatuses[listing.id] === 'synced' && (
+                  <span style={{ color: 'var(--color-warning)' }}> WAITING FOR INVENTORY</span>
+                )}
+                {listing.status === 'PAUSED' && syncStatuses[listing.id] !== 'synced' && (
+                  <span style={{ color: 'var(--color-warning)' }}> PAUSED</span>
+                )}
               </p>
             </div>
-            <div className="flex gap-1">
+            <div className="flex gap-1.5 items-center">
+              {syncStatuses[listing.id] === 'synced' && (
+                <span title="Synced to AislingExchange"><CheckCircle size={13} style={{ color: 'var(--color-success)', opacity: 0.7 }} /></span>
+              )}
+              {syncStatuses[listing.id] === 'pending' && (
+                <span title="Syncing to AislingExchange..."><Clock size={13} style={{ color: 'var(--color-warning)', opacity: 0.7 }} /></span>
+              )}
+              {syncStatuses[listing.id] === 'failed' && (
+                <span
+                  title="Sync failed — click to retry"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => window.merchantMode?.ae.retrySync(listing.id)}
+                >
+                  <AlertTriangle size={13} style={{ color: 'var(--color-danger)', opacity: 0.7 }} />
+                </span>
+              )}
               <button
                 onClick={() => togglePause(listing)}
-                className="btn-secondary px-2 py-1 rounded-md text-xs"
+                className="btn-secondary"
+                style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11 }}
               >
                 {listing.status === 'PAUSED' ? 'Resume' : 'Pause'}
               </button>
               <button
                 onClick={() => startEdit(listing)}
-                className="btn-secondary px-2 py-1 rounded-md text-xs"
+                className="btn-secondary"
+                style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11 }}
               >
                 Edit
               </button>
               <button
                 onClick={() => handleDelete(listing.id)}
-                className="px-2 py-1 rounded-md text-xs"
                 style={{
-                  background: '#dc262620',
+                  padding: '5px 10px',
+                  borderRadius: 6,
+                  fontSize: 11,
+                  background: 'rgba(220,38,38,0.08)',
                   color: 'var(--color-danger)',
                   border: '1px solid transparent',
+                  cursor: 'pointer',
                   transition: 'all 200ms ease',
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--color-danger)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'transparent'; }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--color-danger)'; e.currentTarget.style.background = 'rgba(220,38,38,0.15)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.background = 'rgba(220,38,38,0.08)'; }}
               >
                 Del
               </button>

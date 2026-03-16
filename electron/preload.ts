@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('merchantMode', {
     create: (listing: any) => ipcRenderer.invoke('listings:create', listing),
     update: (listing: any) => ipcRenderer.invoke('listings:update', listing),
     delete: (id: string, characterName?: string) => ipcRenderer.invoke('listings:delete', id, characterName),
+    onChanged: (cb: (data: { characterName: string }) => void) => { ipcRenderer.on('listings:changed', (_e, d) => cb(d)); },
   },
   transactions: {
     getAll: () => ipcRenderer.invoke('transactions:getAll'),
@@ -48,6 +49,22 @@ contextBridge.exposeInMainWorld('merchantMode', {
   ae: {
     getSprite: (name: string) => ipcRenderer.invoke('ae:sprite', name) as Promise<string | null>,
     getAvatar: (name: string) => ipcRenderer.invoke('ae:avatar', name) as Promise<{ avatar_offset_x: number; avatar_offset_y: number; avatar_zoom: number } | null>,
+    // Auth
+    login: (username: string, password: string) => ipcRenderer.invoke('ae:login', username, password) as Promise<{ success: boolean; user?: any; error?: string }>,
+    logout: () => ipcRenderer.invoke('ae:logout') as Promise<void>,
+    getAuthStatus: () => ipcRenderer.invoke('ae:getAuthStatus') as Promise<{ loggedIn: boolean; username?: string; verified?: boolean }>,
+    onAuthChanged: (cb: (status: { loggedIn: boolean; username?: string; verified?: boolean }) => void) => { ipcRenderer.on('ae:authChanged', (_e, d) => cb(d)); },
+    // Items
+    searchItems: (query: string, limit?: number) => ipcRenderer.invoke('ae:searchItems', query, limit) as Promise<{ name: string; slug: string; id: string; category: string | null }[]>,
+    resolveItem: (name: string) => ipcRenderer.invoke('ae:resolveItem', name) as Promise<{ canonical: string; slug: string; id: string } | null>,
+    // Listing sync
+    getSyncStatuses: (ids: string[]) => ipcRenderer.invoke('ae:getSyncStatuses', ids) as Promise<Record<string, string>>,
+    retrySync: (localListingId?: string) => ipcRenderer.invoke('ae:retrySync', localListingId) as Promise<void>,
+    // Player profiles
+    getPlayerProfile: (name: string) => ipcRenderer.invoke('ae:getPlayerProfile', name) as Promise<any>,
+    getPlayerListings: (username: string) => ipcRenderer.invoke('ae:getPlayerListings', username) as Promise<any>,
+    // Import AE listings
+    importListings: (characterName: string) => ipcRenderer.invoke('ae:importListings', characterName) as Promise<{ imported: number; error?: string }>,
   },
   sniffer: {
     getLog: () => ipcRenderer.invoke('sniffer:getLog'),
@@ -69,6 +86,9 @@ contextBridge.exposeInMainWorld('merchantMode', {
       ipcRenderer.on('updater:status', (_e, d) => cb(d));
     },
   },
+  shell: {
+    openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  },
   removeAllListeners: () => {
     const channels = [
       'proxy:packet', 'proxy:status',
@@ -77,7 +97,9 @@ contextBridge.exposeInMainWorld('merchantMode', {
       'engine:exchange-updated', 'engine:exchange-cancelled',
       'engine:transaction', 'engine:validation-failed',
       'inventory:update', 'inventory:gold-update',
+      'listings:changed',
       'merchants:updated',
+      'ae:authChanged',
       'updater:status',
     ];
     channels.forEach((ch) => ipcRenderer.removeAllListeners(ch));

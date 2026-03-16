@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { LayoutDashboard, ArrowLeftRight, Settings as SettingsIcon, Play, Loader2, List, Info, MessageCircle } from 'lucide-react';
+import { LayoutDashboard, Clock, Settings as SettingsIcon, Play, Loader2, List, Info, MessageCircle } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Listings from './pages/Listings';
 import Whispers from './pages/Whispers';
 import Settings from './pages/Settings';
 import About from './pages/About';
+import Profile from './pages/Profile';
 import TransactionLog from './components/TransactionLog';
 import PacketSniffer from './components/PacketSniffer';
 import ConnectionStatus from './components/ConnectionStatus';
@@ -12,15 +13,14 @@ import CharacterTabs from './components/CharacterTabs';
 import AllMerchantsView from './components/AllMerchantsView';
 import UpdateBanner from './components/UpdateBanner';
 
-type Page = 'dashboard' | 'listings' | 'whispers' | 'transactions' | 'sniffer' | 'settings' | 'about';
+type Page = 'dashboard' | 'listings' | 'whispers' | 'transactions' | 'sniffer' | 'settings' | 'about' | 'profile';
 
 const NAV_ITEMS: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { page: 'listings', label: 'Listings', icon: List },
   { page: 'whispers', label: 'Whispers', icon: MessageCircle },
-  { page: 'transactions', label: 'Transactions', icon: ArrowLeftRight },
+  { page: 'transactions', label: 'History', icon: Clock },
   { page: 'settings', label: 'Settings', icon: SettingsIcon },
-  { page: 'about', label: 'About', icon: Info },
 ];
 
 export default function App() {
@@ -36,6 +36,12 @@ export default function App() {
   const [launchError, setLaunchError] = useState('');
   const [allMerchantsMode, setAllMerchantsMode] = useState(false);
   const [allMerchants, setAllMerchants] = useState<GlobalMerchantData[]>([]);
+  const [profileTarget, setProfileTarget] = useState<string | null>(null);
+
+  function viewProfile(name: string) {
+    setProfileTarget(name);
+    setPage('profile');
+  }
 
   useEffect(() => {
     const api = window.merchantMode;
@@ -63,7 +69,6 @@ export default function App() {
         return [...prev, data.name];
       });
       setCharacterTypes((prev) => ({ ...prev, [data.name]: data.connectionType }));
-      // Only auto-select if no character is active and not in all-merchants mode
       setActiveCharacter((prev) => prev ?? data.name);
     });
 
@@ -105,7 +110,6 @@ export default function App() {
     };
   }, []);
 
-  // Auto-select first character if activeCharacter becomes null but characters exist
   useEffect(() => {
     if (!activeCharacter && !allMerchantsMode && characters.length > 0) {
       setActiveCharacter(characters[0]);
@@ -124,25 +128,46 @@ export default function App() {
           borderColor: 'var(--color-surface-500)',
         }}
       >
-        <div className="p-4 pb-3">
-          <h1 className="text-lg font-bold gold-text flex items-center gap-2">
-            <img src="items/4529.png" alt="" className="h-5 w-auto" style={{ imageRendering: 'pixelated' }} />
-            Merchant Mode
-          </h1>
-          <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)', letterSpacing: '0.04em' }}>
-            by AislingExchange.com
-          </p>
+        {/* Brand */}
+        <div className="px-4 pt-5 pb-4">
+          <div className="flex items-center gap-2.5">
+            <div style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: 'linear-gradient(135deg, rgba(201,168,76,0.2), rgba(201,168,76,0.05))',
+              border: '1px solid rgba(201,168,76,0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              <img src="items/4529.png" alt="" style={{ width: 22, height: 22, imageRendering: 'pixelated' }} />
+            </div>
+            <div>
+              <h1 className="text-base font-bold leading-tight tracking-tight" style={{
+                background: 'linear-gradient(135deg, #dbb85e, #f0d078, #c9a84c)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}>
+                Merchant Mode
+              </h1>
+              <p className="text-[10px] leading-tight" style={{ color: 'var(--color-text-tertiary)', letterSpacing: '0.06em' }}>
+                AislingExchange.com
+              </p>
+            </div>
+          </div>
           <div
-            className="mt-2"
+            className="mt-3"
             style={{
-              width: 40,
-              height: 2,
-              borderRadius: 1,
+              height: 1,
               background: 'linear-gradient(90deg, var(--color-gold-400), transparent)',
             }}
           />
         </div>
 
+        {/* Navigation */}
         <div className="flex-1 px-2 flex flex-col gap-1">
           {NAV_ITEMS.map(({ page: p, label, icon: Icon }) => {
             const isActive = page === p;
@@ -150,11 +175,10 @@ export default function App() {
               <button
                 key={p}
                 onClick={() => setPage(p)}
-                className="relative flex items-center gap-3 text-left px-3 py-2.5 rounded-md text-sm"
+                className="nav-item"
                 style={{
                   background: isActive ? 'var(--color-surface-400)' : 'transparent',
                   color: isActive ? 'var(--color-gold-400)' : 'var(--color-text-secondary)',
-                  transition: 'all 200ms ease',
                 }}
                 onMouseEnter={(e) => {
                   if (!isActive) {
@@ -169,17 +193,7 @@ export default function App() {
                   }
                 }}
               >
-                {isActive && (
-                  <div
-                    className="absolute left-0 top-1/2 -translate-y-1/2"
-                    style={{
-                      width: 3,
-                      height: '60%',
-                      borderRadius: 2,
-                      background: 'var(--color-gold-400)',
-                    }}
-                  />
-                )}
+                {isActive && <div className="nav-item-indicator" />}
                 <Icon size={16} />
                 <span style={{ fontWeight: isActive ? 600 : 400 }}>{label}</span>
               </button>
@@ -187,17 +201,8 @@ export default function App() {
           })}
         </div>
 
+        {/* Footer */}
         <div className="px-3 pb-4 space-y-3">
-          <div className="flex justify-center">
-            <ConnectionStatus proxyStatus={proxyStatus} engineState={engineState} />
-          </div>
-          {/* Gradient separator */}
-          <div
-            style={{
-              height: 1,
-              background: 'linear-gradient(90deg, transparent, var(--color-surface-600), transparent)',
-            }}
-          />
           <button
             onClick={async () => {
               setLaunching(true);
@@ -211,22 +216,67 @@ export default function App() {
               }
             }}
             disabled={launching}
-            className="btn-primary w-full px-3 py-2 rounded-md text-sm"
+            className="btn-primary w-full px-3 py-2.5 rounded-lg text-sm"
             style={{ opacity: launching ? 0.6 : 1 }}
           >
             {launching ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
             {launching ? 'Launching...' : 'Launch Client'}
           </button>
           {launchError && (
-            <p className="text-xs" style={{ color: 'var(--color-danger)' }}>{launchError}</p>
+            <p className="text-xs text-center" style={{ color: 'var(--color-danger)' }}>{launchError}</p>
           )}
         </div>
       </nav>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top bar */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 10,
+            padding: '8px 16px',
+            borderBottom: '1px solid var(--color-surface-500)',
+            background: 'var(--color-surface-200)',
+            flexShrink: 0,
+          }}
+        >
+          <ConnectionStatus proxyStatus={proxyStatus} engineState={engineState} />
+          <button
+            onClick={() => setPage('about')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '4px 10px',
+              borderRadius: 6,
+              border: '1px solid var(--color-surface-500)',
+              background: page === 'about' ? 'var(--color-surface-400)' : 'transparent',
+              color: page === 'about' ? 'var(--color-gold-400)' : 'var(--color-text-tertiary)',
+              fontSize: 12,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              if (page !== 'about') {
+                e.currentTarget.style.background = 'var(--color-surface-300)';
+                e.currentTarget.style.color = 'var(--color-text-secondary)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (page !== 'about') {
+                e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.color = 'var(--color-text-tertiary)';
+              }
+            }}
+          >
+            <Info size={13} />
+            About
+          </button>
+        </div>
         <UpdateBanner />
-        {/* Character Tabs */}
         {(page === 'dashboard' || page === 'listings') && (
           <CharacterTabs
             characters={characters}
@@ -239,10 +289,23 @@ export default function App() {
             characterTypes={characterTypes}
           />
         )}
+        {page === 'transactions' && (
+          <CharacterTabs
+            characters={characters}
+            activeCharacter={activeCharacter}
+            onSelect={(name) => { setAllMerchantsMode(false); setActiveCharacter(name); }}
+            onSelectAll={() => {}}
+            isAllSelected={false}
+            allMerchantsCount={0}
+            characterStates={characterStates}
+            characterTypes={characterTypes}
+            hideAllMerchants
+          />
+        )}
 
         <main className="flex-1 overflow-auto p-6">
           {page === 'dashboard' && allMerchantsMode && (
-            <AllMerchantsView merchants={allMerchants} proxyStatus={proxyStatus} />
+            <AllMerchantsView merchants={allMerchants} proxyStatus={proxyStatus} onViewProfile={viewProfile} />
           )}
           {page === 'dashboard' && !allMerchantsMode && (
             <Dashboard
@@ -259,30 +322,26 @@ export default function App() {
             />
           )}
           {page === 'whispers' && (
-            <Whispers characters={characters} />
+            <Whispers characters={characters} onViewProfile={viewProfile} />
           )}
           {page === 'transactions' && (
-            <div className="flex flex-col h-full">
-              <div className="space-y-4 pb-3">
-                <h2 className="text-xl font-semibold gold-text">Transactions</h2>
-                <div
-                  style={{
-                    width: 80,
-                    height: 1,
-                    background: 'linear-gradient(90deg, var(--color-gold-400), transparent)',
-                  }}
-                />
-              </div>
-              <div className="flex-1 min-h-0">
-                <TransactionLog transactions={transactions} />
-              </div>
-            </div>
+            <TransactionLog
+              transactions={
+                allMerchantsMode || !activeCharacter
+                  ? transactions
+                  : transactions.filter((tx) => !tx.characterName || tx.characterName === activeCharacter)
+              }
+              onViewProfile={viewProfile}
+            />
           )}
           {page === 'sniffer' && (
-            <div className="space-y-4">
-              <h2 className="text-xl font-semibold gold-text">Packet Sniffer</h2>
-              <PacketSniffer packets={snifferLog} />
-            </div>
+            <PacketSniffer packets={snifferLog} />
+          )}
+          {page === 'profile' && profileTarget && (
+            <Profile
+              playerName={profileTarget}
+              onBack={() => setPage('dashboard')}
+            />
           )}
           {page === 'settings' && <Settings />}
           {page === 'about' && <About />}

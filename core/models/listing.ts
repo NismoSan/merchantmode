@@ -14,6 +14,7 @@ export interface MerchantListing {
   offeredItems?: { name: string; quantity: number }[];
   notes?: string;
   stackSize?: number;
+  syncToAe?: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Coins } from 'lucide-react';
+import { Coins, Package } from 'lucide-react';
 
 interface InventoryItem {
   slot: number;
@@ -26,12 +26,27 @@ export default function InventoryView({ items, gold, onItemClick }: Props) {
   });
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="stat-label">
-          Inventory <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 400 }}>({items.length}/60)</span>
-        </h3>
-        <span className="flex items-center gap-1 text-sm font-medium" style={{ color: 'var(--color-warning)' }}>
+        <div className="section-header" style={{ marginBottom: 0 }}>
+          <Package size={16} className="section-icon" />
+          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }} className="gold-text">Inventory</h3>
+          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 400 }}>
+            ({items.length}/60)
+          </span>
+        </div>
+        <span style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 12px',
+          borderRadius: 16,
+          background: 'rgba(251,191,36,0.1)',
+          border: '1px solid rgba(251,191,36,0.15)',
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--color-warning)',
+        }}>
           <Coins size={12} />
           {formatGold(gold)}
         </span>
@@ -41,7 +56,7 @@ export default function InventoryView({ items, gold, onItemClick }: Props) {
         style={{
           gridTemplateColumns: 'repeat(15, 1fr)',
           background: 'var(--color-surface-500)',
-          borderRadius: 6,
+          borderRadius: 8,
           overflow: 'hidden',
           border: '1px solid var(--color-surface-500)',
         }}
@@ -60,7 +75,7 @@ export default function InventoryView({ items, gold, onItemClick }: Props) {
               transition: 'all 150ms ease',
               borderRadius: 2,
               boxShadow: hoveredSlot === i && item
-                ? 'inset 0 0 0 1px var(--color-border-hover)'
+                ? 'inset 0 0 0 1px var(--color-border-hover), 0 0 8px var(--color-gold-glow)'
                 : 'none',
             }}
             title={item ? `${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ''}${item.isStackable ? ' [stackable]' : ''} — click to list` : `Slot ${i + 1}`}
@@ -114,7 +129,7 @@ export default function InventoryView({ items, gold, onItemClick }: Props) {
           </div>
         ))}
       </div>
-      <p className="text-xs italic" style={{ color: 'var(--color-text-tertiary)' }}>
+      <p style={{ margin: 0, fontSize: 11, fontStyle: 'italic', color: 'var(--color-text-tertiary)' }}>
         Click an item to create a listing
       </p>
     </div>

@@ -545,6 +545,7 @@ export class MerchantEngine extends EventEmitter {
     const transaction: Transaction = {
       id: crypto.randomUUID(),
       listingId: listing.id,
+      characterName: this.characterName,
       counterpartyName: this.currentExchange?.targetName ?? 'Unknown',
       type: listing.type,
       itemsGiven,

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import { ProxyServer } from '../core/proxy/proxy-server';
@@ -15,12 +15,20 @@ import { ConnectionPhase } from '../core/proxy/connection-state';
 import { launchClient, readCharacterName, closeClientHandles, type LaunchedClient } from '../core/launcher/client-launcher';
 import * as db from '../core/db/database';
 import type { MerchantListing } from '../core/models/listing';
+import { AeApiClient } from '../core/ae/ae-api-client';
+import { ItemCache } from '../core/ae/item-cache';
+import { ListingSync } from '../core/ae/listing-sync';
 
 let mainWindow: BrowserWindow | null = null;
 let proxyServer: ProxyServer | null = null;
 const merchantHub = new MerchantHubClient();
 const launchedClients: Map<number, LaunchedClient> = new Map();
 const PROXY_PORT = 2615; // Local proxy port — avoids 2610-2612 which bots commonly bind
+
+// AE integration modules
+const aeClient = new AeApiClient();
+const itemCache = new ItemCache(aeClient);
+const listingSync = new ListingSync(aeClient, itemCache);
 
 // Per-character contexts — each connected character gets its own engine + inventory
 interface CharacterContext {
@@ -84,7 +92,17 @@ function pushHubUpdate(): void {
     const loc = ctx.locationTracker.getLocation();
     const listings = ctx.engine.getListings()
       .filter((l) => l.status === 'ACTIVE')
-      .map((l) => ({ type: l.type, itemName: l.itemName, price: l.price, status: l.status }));
+      .map((l) => ({
+        type: l.type,
+        itemName: l.itemName,
+        price: l.price,
+        status: l.status,
+        quantity: l.quantity,
+        quantityRemaining: l.quantityRemaining,
+        stackSize: l.stackSize,
+        wantedItems: l.wantedItems,
+        notes: l.notes,
+      }));
     characters.push({ name: ctx.characterName, mapName: loc.mapName, x: loc.x, y: loc.y, listings });
   }
   merchantHub.sendUpdate(characters);
@@ -178,7 +196,21 @@ function createCharacterContext(characterName: string, connection: ProxyConnecti
     db.insertTransaction(tx);
     // Update listing in DB
     const listing = engine.getListings().find((l) => l.id === tx.listingId);
-    if (listing) db.updateListing(listing);
+    if (listing) {
+      db.updateListing(listing);
+      // Sync updated listing to AE
+      listingSync.syncUpdate(listing).catch(err => console.error('[AE Sync] tx-update failed:', err));
+    }
+    // Also sync transaction as a price entry on AE
+    const txItem = tx.itemsGiven?.[0] || tx.itemsReceived?.[0];
+    if (txItem) {
+      listingSync.syncTransaction({
+        itemName: txItem.name,
+        type: tx.type,
+        price: tx.goldReceived || tx.goldGiven || 0,
+        quantity: txItem.quantity || 1,
+      }).catch(err => console.error('[AE Sync] tx-price failed:', err));
+    }
     send('engine:transaction', { characterName, ...tx });
   });
 
@@ -264,13 +296,56 @@ function createCharacterContext(characterName: string, connection: ProxyConnecti
     }
   });
 
-  // Inventory tracker events -> renderer
+  // Inventory tracker events -> renderer + auto-activate/pause listings based on inventory
+  function checkInventoryListingStatus() {
+    const listings = db.getAllListings(characterName);
+    let changed = false;
+    for (const listing of listings) {
+      // Only auto-manage listings that are synced from AE (have a mapping)
+      const aeMap = db.getAeListingMap(listing.id);
+      if (!aeMap) continue;
+
+      if (listing.type === 'SELL' || listing.type === 'TRADE') {
+        const hasItem = inventoryTracker.hasItem(listing.itemName);
+        if (hasItem && listing.status === 'PAUSED') {
+          listing.status = 'ACTIVE';
+          db.updateListing(listing);
+          changed = true;
+        } else if (!hasItem && listing.status === 'ACTIVE') {
+          listing.status = 'PAUSED';
+          db.updateListing(listing);
+          changed = true;
+        }
+      }
+      // BUY listings: activate if character has enough gold
+      if (listing.type === 'BUY') {
+        const hasGold = inventoryTracker.getGold() >= listing.price;
+        if (hasGold && listing.status === 'PAUSED') {
+          listing.status = 'ACTIVE';
+          db.updateListing(listing);
+          changed = true;
+        } else if (!hasGold && listing.status === 'ACTIVE') {
+          listing.status = 'PAUSED';
+          db.updateListing(listing);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      engine.setListings(db.getAllListings(characterName));
+      pushHubUpdate();
+      send('listings:changed', { characterName });
+    }
+  }
+
   inventoryTracker.on('itemAdded', () => {
     send('inventory:update', { characterName, items: Array.from(inventoryTracker.getState().items.values()) });
+    checkInventoryListingStatus();
   });
 
   inventoryTracker.on('itemRemoved', () => {
     send('inventory:update', { characterName, items: Array.from(inventoryTracker.getState().items.values()) });
+    checkInventoryListingStatus();
   });
 
   inventoryTracker.on('goldUpdated', (gold: number) => {
@@ -348,6 +423,11 @@ function startProxy() {
         console.log(`[MerchantMode] Pushing inventory snapshot for ${charName}: ${items.length} items, ${gold} gold`);
         send('inventory:update', { characterName: charName, items });
         send('inventory:gold-update', { characterName: charName, gold });
+
+        // Auto-import AE listings for this character after inventory loads
+        importAeListings(charName).then(r => {
+          if (r.imported > 0) console.log(`[AE AutoSync] Imported ${r.imported} listing(s) for ${charName} on connect`);
+        }).catch(() => {});
       }, 500);
     }
 
@@ -524,6 +604,109 @@ function formatGold(amount: number): string {
   return amount.toString();
 }
 
+// --- AE Listing Import ---
+
+async function importAeListings(characterName: string): Promise<{ imported: number; error?: string }> {
+  if (!aeClient.isLoggedIn()) return { imported: 0, error: 'Not logged in' };
+
+  const authStatus = aeClient.getAuthStatus();
+  if (!authStatus.username) return { imported: 0, error: 'No AE username' };
+
+  const result = await aeClient.get<{ data: any[] }>(`/listings/user/${encodeURIComponent(authStatus.username)}`);
+  if (!result.data?.data) return { imported: 0, error: result.error || 'Failed to fetch AE listings' };
+
+  const aeListings = result.data.data.filter((l: any) => l.status === 'ACTIVE');
+  let imported = 0;
+  const localListings = db.getAllListings(characterName);
+
+  for (const aeListing of aeListings) {
+    const alreadyMapped = localListings.some(ll => {
+      const map = db.getAeListingMap(ll.id);
+      return map && map.aeId === aeListing.id;
+    });
+    if (alreadyMapped) continue;
+
+    const existingLocal = localListings.find(ll =>
+      ll.itemName.toLowerCase() === (aeListing.item_name || '').toLowerCase() &&
+      ll.type === aeListing.type &&
+      ll.characterName === characterName
+    );
+    if (existingLocal) {
+      db.setAeListingMap(existingLocal.id, aeListing.id, aeListing.item_id || null);
+      continue;
+    }
+
+    const localId = crypto.randomUUID();
+    const newListing: MerchantListing = {
+      id: localId,
+      characterName,
+      type: aeListing.type,
+      itemName: aeListing.item_name || '',
+      price: aeListing.price || 0,
+      quantity: aeListing.quantity || 1,
+      quantityRemaining: aeListing.quantity || 1,
+      status: 'PAUSED',
+      wantedItems: aeListing.wanted_items ? [{ name: aeListing.wanted_items, quantity: 1 }] : undefined,
+      notes: aeListing.notes || undefined,
+      syncToAe: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    db.insertListing(newListing);
+    db.setAeListingMap(localId, aeListing.id, aeListing.item_id || null);
+    imported++;
+  }
+
+  if (imported > 0) {
+    const ctx = characterContexts.get(characterName);
+    if (ctx) {
+      ctx.engine.setListings(db.getAllListings(characterName));
+      const allListings = db.getAllListings(characterName);
+      let changed = false;
+      for (const listing of allListings) {
+        const aeMap = db.getAeListingMap(listing.id);
+        if (!aeMap) continue;
+        if ((listing.type === 'SELL' || listing.type === 'TRADE') && listing.status === 'PAUSED') {
+          if (ctx.inventoryTracker.hasItem(listing.itemName)) {
+            listing.status = 'ACTIVE';
+            db.updateListing(listing);
+            changed = true;
+          }
+        }
+        if (listing.type === 'BUY' && listing.status === 'PAUSED') {
+          if (ctx.inventoryTracker.getGold() >= listing.price) {
+            listing.status = 'ACTIVE';
+            db.updateListing(listing);
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        ctx.engine.setListings(db.getAllListings(characterName));
+        pushHubUpdate();
+      }
+    }
+    send('listings:changed', { characterName });
+  }
+
+  return { imported };
+}
+
+async function autoSyncAeListings() {
+  if (!aeClient.isLoggedIn()) return;
+  for (const [charName] of characterContexts) {
+    try {
+      const result = await importAeListings(charName);
+      if (result.imported > 0) {
+        console.log(`[AE AutoSync] Imported ${result.imported} listing(s) for ${charName}`);
+      }
+    } catch (err) {
+      console.error(`[AE AutoSync] Error for ${charName}:`, err);
+    }
+  }
+}
+
 // --- IPC Handlers ---
 
 function registerIpcHandlers() {
@@ -564,6 +747,8 @@ function registerIpcHandlers() {
     const ctx = characterContexts.get(listing.characterName ?? '');
     if (ctx) ctx.engine.setListings(db.getAllListings(listing.characterName));
     pushHubUpdate();
+    // Auto-sync to AE (fire-and-forget)
+    listingSync.syncCreate(listing).catch(err => console.error('[AE Sync] create failed:', err));
     return db.getAllListings(listing.characterName);
   });
 
@@ -572,6 +757,8 @@ function registerIpcHandlers() {
     const ctx = characterContexts.get(listing.characterName ?? '');
     if (ctx) ctx.engine.setListings(db.getAllListings(listing.characterName));
     pushHubUpdate();
+    // Auto-sync to AE (fire-and-forget)
+    listingSync.syncUpdate(listing).catch(err => console.error('[AE Sync] update failed:', err));
     return db.getAllListings(listing.characterName);
   });
 
@@ -582,6 +769,8 @@ function registerIpcHandlers() {
       if (ctx) ctx.engine.setListings(db.getAllListings(characterName));
     }
     pushHubUpdate();
+    // Auto-sync to AE (fire-and-forget)
+    listingSync.syncDelete(id).catch(err => console.error('[AE Sync] delete failed:', err));
     return db.getAllListings(characterName);
   });
 
@@ -666,6 +855,89 @@ function registerIpcHandlers() {
     }
   });
 
+  // ── AE Auth ──────────────────────────────────────────────
+
+  ipcMain.handle('ae:login', async (_e, username: string, password: string) => {
+    const result = await aeClient.login(username, password);
+    if (result.data) return { success: true, user: result.data };
+    return { success: false, error: result.error };
+  });
+
+  ipcMain.handle('ae:logout', () => {
+    aeClient.logout();
+  });
+
+  ipcMain.handle('ae:getAuthStatus', () => {
+    return aeClient.getAuthStatus();
+  });
+
+  aeClient.on('authChanged', (status: any) => {
+    send('ae:authChanged', status);
+  });
+
+  // ── AE Items ────────────────────────────────────────────
+
+  ipcMain.handle('ae:searchItems', (_e, query: string, limit?: number) => {
+    return itemCache.searchItems(query, limit);
+  });
+
+  ipcMain.handle('ae:resolveItem', (_e, name: string) => {
+    return itemCache.resolveItemName(name);
+  });
+
+  // ── AE Listing Sync ────────────────────────────────────
+
+  ipcMain.handle('ae:getSyncStatuses', (_e, ids: string[]) => {
+    return listingSync.getSyncStatuses(ids);
+  });
+
+  ipcMain.handle('ae:retrySync', async (_e, localListingId?: string) => {
+    await listingSync.retrySync(localListingId);
+  });
+
+  // Auto-sync on auth change (user logs in)
+  aeClient.on('authChanged', (status: { loggedIn: boolean }) => {
+    if (status.loggedIn) {
+      setTimeout(() => autoSyncAeListings(), 2_000);
+    }
+  });
+
+  // Auto-sync every 10 minutes
+  setInterval(() => autoSyncAeListings(), 10 * 60_000);
+
+  ipcMain.handle('ae:importListings', async (_e, characterName: string) => {
+    return importAeListings(characterName);
+  });
+
+  // ── AE Player Profiles ─────────────────────────────────
+
+  const playerProfileCache = new Map<string, { data: any; expiresAt: number }>();
+
+  ipcMain.handle('ae:getPlayerProfile', async (_e, name: string) => {
+    const key = name.toLowerCase();
+    const cached = playerProfileCache.get(key);
+    if (cached && Date.now() < cached.expiresAt) return cached.data;
+    try {
+      const res = await fetch(`${AE_API}/players/${encodeURIComponent(name)}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      playerProfileCache.set(key, { data, expiresAt: Date.now() + 2 * 60_000 });
+      return data;
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('ae:getPlayerListings', async (_e, username: string) => {
+    try {
+      const res = await fetch(`${AE_API}/listings/user/${encodeURIComponent(username)}`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  });
+
   // Packet sniffer
   ipcMain.handle('sniffer:getLog', () => packetLog.slice(-200));
 
@@ -677,6 +949,11 @@ function registerIpcHandlers() {
   ipcMain.handle('updater:check', () => autoUpdater.checkForUpdates().catch(() => {}));
   ipcMain.handle('updater:install', () => autoUpdater.quitAndInstall());
   ipcMain.handle('updater:version', () => app.getVersion());
+
+  // Open external URLs in the default browser
+  ipcMain.handle('shell:openExternal', (_e, url: string) => {
+    if (url.startsWith('https://')) shell.openExternal(url);
+  });
 
   // Client launcher
   ipcMain.handle('launcher:launch', async () => {
@@ -753,16 +1030,28 @@ function setupAutoUpdater() {
 
 // --- App lifecycle ---
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
   registerIpcHandlers();
   startProxy();
   setupAutoUpdater();
+
+  // Initialize AE integration (non-blocking)
+  try {
+    await aeClient.init();
+    await itemCache.init();
+    listingSync.init();
+    console.log(`[AE] Initialized — auth=${aeClient.isLoggedIn()}, items=${itemCache.getItemCount()}`);
+  } catch (err) {
+    console.error('[AE] Init error (non-fatal):', err);
+  }
 });
 
 app.on('window-all-closed', () => {
   merchantHub.disconnect();
   proxyServer?.stop();
+  itemCache.dispose();
+  listingSync.dispose();
   for (const client of launchedClients.values()) {
     closeClientHandles(client);
   }

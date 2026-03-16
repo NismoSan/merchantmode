@@ -83,7 +83,11 @@
       "Bash(find /c/Users/Third/AEofficial -type f \\\\\\(-name *sprite* -o -name *avatar* -o -name *image* \\\\\\))",
       "Bash(curl -s https://api.aislingexchange.com/players/test/avatar)",
       "Bash(curl -s https://api.aislingexchange.com/api/players/test/avatar)",
-      "Bash(curl -s https://api.aislingexchange.com/api/players/Kedian/sprite.png -o /dev/null -w \"%{http_code}\")"
+      "Bash(curl -s https://api.aislingexchange.com/api/players/Kedian/sprite.png -o /dev/null -w \"%{http_code}\")",
+      "Bash(ls -1 /c/Users/Third/MerchantMode/merchantmode/public/items/*.png)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx|json\\)$\")",
+      "Bash(grep -E \"\\\\.\\(json|ts|tsx|js\\)$\")",
+      "Bash(grep \"\\\\.png$\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Third\\AEofficial\\public\\items",

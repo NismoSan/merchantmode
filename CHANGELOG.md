@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.1.2
+
+### New Features
+- **AislingExchange Account Integration** — log in to your AE account directly from Settings; auth tokens persist across sessions and auto-validate on startup; AE connection status shown in the top bar with a globe icon indicator
+- **Bidirectional Listing Sync with AislingExchange** — listings created, updated, or deleted in MerchantMode automatically sync to the AE marketplace; per-listing "Sync to AislingExchange" toggle controls which listings get pushed; sync status indicators (synced/pending/failed) on each listing with manual retry on failure
+- **AE Listing Import** — on character connect, active AE listings not already present locally are auto-imported in PAUSED status and auto-activate when inventory/gold allows; manual "Sync AE" button for on-demand import; auto-sync runs every 10 minutes and on AE login
+- **Inventory-Aware Auto-Pause/Resume** — SELL/TRADE listings auto-pause when the item leaves inventory and auto-resume when it returns; BUY listings auto-pause when gold drops below listing price and auto-resume when funds are sufficient; "WAITING FOR INVENTORY" status label replaces generic "PAUSED"
+- **Item Autocomplete** — autocomplete dropdown when typing item names in listing forms, powered by the AE item database; category color-coding (Weapon, Armor, Consumable, etc.) and keyboard navigation; item cache fetches from AE API on startup with local SQLite fallback
+- **Player Profile Page** — click any player name (All Merchants, Whispers, Transaction Log) to view their in-app profile showing character sprite, class, title, master status, online/offline indicator, Discord username, verification badge, live bot listings with map location, and AE marketplace listings
+- **Completed Trade Price Reporting** — transaction data (item, type, price, quantity) auto-posted to AE as a price entry on trade completion
+- **Transactions Track Character Name** — each transaction now records which character completed it; History tab has character tabs to filter by character
+- **Richer Merchant Hub Data** — hub now broadcasts quantity, quantityRemaining, stackSize, wantedItems, and notes per listing; other MerchantMode users see full detail in All Merchants view
+
+### Improvements
+- **Trade Listing Support** — Create Listing modal now has a proper TRADE mode with "You give" / "You receive" sections, wanted item autocomplete, quantity fields, and configurable repeat count
+- **All Merchants View** — merchant cards show full listing details: stack sizes, per-stack prices, quantity remaining, trade arrows with wanted items, and notes
+- **Transaction Log Redesign** — two-sided trade flow layout with character avatars, "Gave"/"Got" breakdowns, and type badges (SELL/BUY/TRADE); counterparty names are clickable
+- **Listings Real-Time Refresh** — Listings page listens for `listings:changed` events and refreshes automatically
+
+### Bug Fixes
+- Fixed Create Listing modal not resetting price, notes, and trade fields when selecting a new item from inventory
+
+### UI/UX
+- **Complete visual overhaul** — consistent page hero headers with gradient backgrounds, icons, titles, and subtitles across all pages
+- **Sidebar redesign** — new icon badge branding, "Transactions" renamed to "History", "About" moved to top bar
+- **New top bar** — persistent bar showing proxy connection status (pulsing dot), AE auth status, and engine state
+- **Dashboard** — stat cards with colored icons and hover lift effects
+- **Whispers** — hero header with message count pill, improved row styling, clickable player names
+- **Settings** — restructured into distinct section cards (AE Account, Client & Proxy, Bot Clients, Auto-Reply, Trade Settings)
+- **About page** — complete redesign with floating item sprites, feature cards, and animated hero section
+- **Update banner** — download icon, progress bar during download, improved button styling
+- **General polish** — larger border radii, hover effects on buttons, gold-tint secondary buttons, gradient avatar backgrounds, staggered slide-up animations for list items
+
 ## v1.1.0
 
 ### New Features

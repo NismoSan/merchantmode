@@ -30,6 +30,7 @@ interface MerchantModeAPI {
     create: (listing: any) => Promise<any[]>;
     update: (listing: any) => Promise<any[]>;
     delete: (id: string, characterName?: string) => Promise<any[]>;
+    onChanged: (cb: (data: { characterName: string }) => void) => void;
   };
   transactions: {
     getAll: () => Promise<any[]>;
@@ -48,6 +49,22 @@ interface MerchantModeAPI {
   ae: {
     getSprite: (name: string) => Promise<string | null>;
     getAvatar: (name: string) => Promise<{ avatar_offset_x: number; avatar_offset_y: number; avatar_zoom: number } | null>;
+    // Auth
+    login: (username: string, password: string) => Promise<{ success: boolean; user?: { id: string; username: string; verified: boolean }; error?: string }>;
+    logout: () => Promise<void>;
+    getAuthStatus: () => Promise<{ loggedIn: boolean; username?: string; verified?: boolean }>;
+    onAuthChanged: (cb: (status: { loggedIn: boolean; username?: string; verified?: boolean }) => void) => void;
+    // Items
+    searchItems: (query: string, limit?: number) => Promise<{ name: string; slug: string; id: string; category: string | null }[]>;
+    resolveItem: (name: string) => Promise<{ canonical: string; slug: string; id: string } | null>;
+    // Listing sync
+    getSyncStatuses: (ids: string[]) => Promise<Record<string, 'synced' | 'pending' | 'failed' | 'not_synced'>>;
+    retrySync: (localListingId?: string) => Promise<void>;
+    // Player profiles
+    getPlayerProfile: (name: string) => Promise<any>;
+    getPlayerListings: (username: string) => Promise<any>;
+    // Import AE listings
+    importListings: (characterName: string) => Promise<{ imported: number; error?: string }>;
   };
   sniffer: {
     getLog: () => Promise<any[]>;
@@ -67,6 +84,9 @@ interface MerchantModeAPI {
     browse: () => Promise<string | null>;
     getPath: () => Promise<string>;
   };
+  shell: {
+    openExternal: (url: string) => Promise<void>;
+  };
   removeAllListeners: () => void;
 }
 
@@ -76,6 +96,11 @@ declare global {
     itemName: string;
     price: number;
     status: string;
+    quantity?: number;
+    quantityRemaining?: number;
+    stackSize?: number;
+    wantedItems?: { name: string; quantity: number }[];
+    notes?: string;
   }
 
   interface GlobalMerchantData {
