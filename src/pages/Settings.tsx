@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Check, Copy, Settings as SettingsIcon, Server, Bot, MessageSquare, Timer, Globe, LogOut, ShieldCheck, AlertCircle } from 'lucide-react';
+import { Save, Check, Copy, Settings as SettingsIcon, Server, Bot, MessageSquare, Timer, Globe, LogOut, ShieldCheck, AlertCircle, Download, RefreshCw } from 'lucide-react';
 
 export default function Settings() {
   const [clientPath, setClientPath] = useState('');
@@ -9,6 +9,8 @@ export default function Settings() {
   const [replyTrade, setReplyTrade] = useState('');
   const [exchangeTimeout, setExchangeTimeout] = useState('60');
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true);
+  const [autoReconnectEnabled, setAutoReconnectEnabled] = useState(true);
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -32,7 +34,8 @@ export default function Settings() {
     api.settings.get('reply_trade', 'I will trade {item} for {wanted}. Open exchange with me.').then(setReplyTrade);
     api.settings.get('exchange_timeout', '60').then(setExchangeTimeout);
     api.settings.get('auto_reply_enabled', 'true').then((v) => setAutoReplyEnabled(v === 'true'));
-
+    api.settings.get('auto_update_enabled', 'true').then((v) => setAutoUpdateEnabled(v === 'true'));
+    api.settings.get('auto_reconnect_enabled', 'true').then((v) => setAutoReconnectEnabled(v === 'true'));
     // Load AE auth status
     api.ae.getAuthStatus().then((status) => {
       setAeLoggedIn(status.loggedIn);
@@ -51,6 +54,8 @@ export default function Settings() {
     const api = window.merchantMode?.settings;
     if (!api) return;
 
+    await api.set('auto_update_enabled', autoUpdateEnabled.toString());
+    await api.set('auto_reconnect_enabled', autoReconnectEnabled.toString());
     await api.set('auto_reply_enabled', autoReplyEnabled.toString());
     await api.set('reply_available', replyAvailable);
     await api.set('reply_not_found', replyNotFound);
@@ -253,6 +258,40 @@ export default function Settings() {
             <Field label="Server" value="da0.kru.com:2610" disabled />
             <Field label="Local Proxy Port" value="2615" disabled />
           </div>
+          <div
+            className="flex items-center justify-between cursor-pointer"
+            onClick={() => setAutoReconnectEnabled(!autoReconnectEnabled)}
+            style={{
+              padding: '12px 14px',
+              borderRadius: 8,
+              marginTop: 12,
+              background: 'var(--color-surface-200)',
+              border: '1px solid var(--color-surface-500)',
+              transition: 'border-color 200ms ease',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(201,168,76,0.3)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--color-surface-500)'; }}
+          >
+            <div>
+              <span className="flex items-center gap-1.5" style={{ fontSize: 13, color: 'var(--color-text-primary)', fontWeight: 500 }}>
+                <RefreshCw size={13} /> Auto-reconnect on server restart
+              </span>
+              <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                Automatically re-launch and log in after the daily server restart
+              </p>
+            </div>
+            <div
+              className="toggle-track"
+              style={{
+                background: autoReconnectEnabled
+                  ? 'linear-gradient(135deg, #dbb85e, #b8973e)'
+                  : 'var(--color-surface-500)',
+                marginLeft: 16,
+              }}
+            >
+              <div className="toggle-thumb" style={{ left: autoReconnectEnabled ? 22 : 2 }} />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -339,8 +378,52 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Trade Settings */}
+      {/* Updates */}
       <div className="section-card animate-slide-up" style={{ animationDelay: '320ms' }}>
+        <div className="section-header">
+          <Download size={16} className="section-icon" />
+          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }} className="gold-text">Updates</h3>
+        </div>
+        <div
+          className="flex items-center justify-between cursor-pointer"
+          onClick={() => setAutoUpdateEnabled(!autoUpdateEnabled)}
+          style={{
+            padding: '12px 14px',
+            borderRadius: 8,
+            background: 'var(--color-surface-200)',
+            border: '1px solid var(--color-surface-500)',
+            transition: 'border-color 200ms ease',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(201,168,76,0.3)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--color-surface-500)'; }}
+        >
+          <div>
+            <span style={{ fontSize: 13, color: 'var(--color-text-primary)', fontWeight: 500 }}>Automatic updates</span>
+            <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+              Automatically download and install updates in the background. When disabled, you can still check for and install updates manually from the About page.
+            </p>
+          </div>
+          <div
+            className="toggle-track"
+            style={{
+              background: autoUpdateEnabled
+                ? 'linear-gradient(135deg, #dbb85e, #b8973e)'
+                : 'var(--color-surface-500)',
+              marginLeft: 16,
+            }}
+          >
+            <div className="toggle-thumb" style={{ left: autoUpdateEnabled ? 22 : 2 }} />
+          </div>
+        </div>
+        {!autoUpdateEnabled && (
+          <p style={{ margin: '10px 0 0', fontSize: 11, color: 'var(--color-text-tertiary)', lineHeight: 1.5, paddingLeft: 2 }}>
+            Restart the app after saving for this change to take full effect. You can manually check for updates on the About page at any time.
+          </p>
+        )}
+      </div>
+
+      {/* Trade Settings */}
+      <div className="section-card animate-slide-up" style={{ animationDelay: '380ms' }}>
         <div className="section-header">
           <Timer size={16} className="section-icon" />
           <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }} className="gold-text">Trade Settings</h3>

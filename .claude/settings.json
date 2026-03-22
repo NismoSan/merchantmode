@@ -95,7 +95,22 @@
       "Bash(grep -r thirdbrody@gmail.com /c/Users/Third/MerchantMode/merchantmode --include=*.ts --include=*.tsx --include=*.json --include=*.md)",
       "Bash(git status:*)",
       "Bash(find /c/Users/Third/MerchantMode/merchantmode -name *.db -o -name *.sqlite)",
-      "Bash(git check-ignore:*)"
+      "Bash(git check-ignore:*)",
+      "Bash(xargs cat:*)",
+      "Bash(find c:UsersThirdMerchantModemerchantmodecoreproxy -type f -name *.ts)",
+      "Bash(grep -r 'class ConnectionState' c:UsersThirdMerchantModemerchantmodecore --include=*.ts)",
+      "Bash(find c:/Users/Third/MerchantMode/merchantmode/core/network/packets -type f -name *.ts)",
+      "Bash(grep -r \"0x33\\\\|DisplayVisible\\\\|DisplayAisling\" c:UsersThirdMerchantModemerchantmode/core --include=*.ts)",
+      "Bash(grep -r \"0x0D\\\\|ChatMessage\" c:UsersThirdMerchantModemerchantmode/core --include=*.ts)",
+      "Bash(grep -r \"guild\\\\|Guild\\\\|color\\\\|green\" c:UsersThirdMerchantModemerchantmode/core --include=*.ts)",
+      "Bash(grep -r \"0x33\\\\|0x0D\\\\|0x1A\\\\|0x0A\\\\|0x07\\\\|0x33\\\\|0x51\" c:/Users/Third/MerchantMode/merchantmode/core --include=*.ts)",
+      "WebSearch",
+      "Bash(find c:UsersThirdMerchantModemerchantmode -name *ae-api* -o -name *AeApiClient*)",
+      "Bash(find c:UsersThirdMerchantModemerchantmodecore -type f -name *.ts)",
+      "Bash(xargs basename:*)",
+      "Bash(grep -r \"reconnecting\\\\|autoReconnect\\\\|_scheduleAutoReconnect\" C:UsersThirdOneDriveDesktopda.js-masterda.js-mastersrc --include=*.ts)",
+      "Bash(find C:UsersThirdOneDriveDesktopda.js-masterda.js-mastersrc -type f -name *.ts)",
+      "Bash(npx tsx -e \":*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Third\\AEofficial\\public\\items",

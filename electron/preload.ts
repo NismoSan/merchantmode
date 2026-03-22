@@ -78,8 +78,17 @@ contextBridge.exposeInMainWorld('merchantMode', {
     browse: () => ipcRenderer.invoke('launcher:browse') as Promise<string | null>,
     getPath: () => ipcRenderer.invoke('launcher:getPath') as Promise<string>,
   },
+  reconnect: {
+    getState: () => ipcRenderer.invoke('reconnect:getState'),
+    cancel: (characterName: string) => ipcRenderer.invoke('reconnect:cancel', characterName),
+    cancelAll: () => ipcRenderer.invoke('reconnect:cancelAll'),
+    onStatus: (cb: (data: { characterName: string; attempt: number; state: string; delay: number }) => void) => {
+      ipcRenderer.on('reconnect:status', (_e, d) => cb(d));
+    },
+  },
   updater: {
     check: () => ipcRenderer.invoke('updater:check'),
+    download: () => ipcRenderer.invoke('updater:download'),
     install: () => ipcRenderer.invoke('updater:install'),
     getVersion: () => ipcRenderer.invoke('updater:version') as Promise<string>,
     onStatus: (cb: (data: { status: string; version?: string; percent?: number; message?: string }) => void) => {
@@ -88,6 +97,10 @@ contextBridge.exposeInMainWorld('merchantMode', {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  },
+  debug: {
+    isDev: () => ipcRenderer.invoke('debug:isDev') as Promise<boolean>,
+    simulateServerDisconnect: () => ipcRenderer.invoke('debug:simulateServerDisconnect'),
   },
   removeAllListeners: () => {
     const channels = [
@@ -100,6 +113,7 @@ contextBridge.exposeInMainWorld('merchantMode', {
       'listings:changed',
       'merchants:updated',
       'ae:authChanged',
+      'reconnect:status',
       'updater:status',
     ];
     channels.forEach((ch) => ipcRenderer.removeAllListeners(ch));

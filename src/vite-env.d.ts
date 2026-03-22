@@ -73,8 +73,15 @@ interface MerchantModeAPI {
     get: (key: string, defaultValue?: string) => Promise<string>;
     set: (key: string, value: string) => Promise<void>;
   };
+  reconnect: {
+    getState: () => Promise<{ characterName: string; attempt: number; state: string; delay: number }[]>;
+    cancel: (characterName: string) => Promise<void>;
+    cancelAll: () => Promise<void>;
+    onStatus: (cb: (data: { characterName: string; attempt: number; state: string; delay: number }) => void) => void;
+  };
   updater: {
     check: () => Promise<void>;
+    download: () => Promise<void>;
     install: () => void;
     getVersion: () => Promise<string>;
     onStatus: (cb: (data: { status: string; version?: string; percent?: number; message?: string }) => void) => void;
@@ -86,6 +93,10 @@ interface MerchantModeAPI {
   };
   shell: {
     openExternal: (url: string) => Promise<void>;
+  };
+  debug: {
+    isDev: () => Promise<boolean>;
+    simulateServerDisconnect: () => Promise<{ success: boolean; error?: string }>;
   };
   removeAllListeners: () => void;
 }

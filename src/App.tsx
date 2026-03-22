@@ -12,6 +12,7 @@ import ConnectionStatus from './components/ConnectionStatus';
 import CharacterTabs from './components/CharacterTabs';
 import AllMerchantsView from './components/AllMerchantsView';
 import UpdateBanner from './components/UpdateBanner';
+import ReconnectBanner from './components/ReconnectBanner';
 
 type Page = 'dashboard' | 'listings' | 'whispers' | 'transactions' | 'sniffer' | 'settings' | 'about' | 'profile';
 
@@ -37,9 +38,12 @@ export default function App() {
   const [allMerchantsMode, setAllMerchantsMode] = useState(false);
   const [allMerchants, setAllMerchants] = useState<GlobalMerchantData[]>([]);
   const [profileTarget, setProfileTarget] = useState<string | null>(null);
+  const [profileReturnPage, setProfileReturnPage] = useState<Page>('dashboard');
+  const [isDev, setIsDev] = useState(false);
 
   function viewProfile(name: string) {
     setProfileTarget(name);
+    setProfileReturnPage(page);
     setPage('profile');
   }
 
@@ -47,6 +51,7 @@ export default function App() {
     const api = window.merchantMode;
     if (!api) return;
 
+    api.debug.isDev().then(setIsDev).catch(() => {});
     api.proxy.getStatus().then(setProxyStatus);
     api.merchants.getAll().then(setAllMerchants);
     api.merchants.onUpdated(setAllMerchants);
@@ -275,8 +280,41 @@ export default function App() {
             <Info size={13} />
             About
           </button>
+          {isDev && (
+            <button
+              onClick={async () => {
+                const result = await window.merchantMode?.debug.simulateServerDisconnect();
+                if (result?.success) console.log('[Debug] Server disconnect simulated');
+                else console.log('[Debug] Failed:', result?.error);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 10px',
+                borderRadius: 6,
+                background: 'rgba(239,68,68,0.1)',
+                border: '1px solid rgba(239,68,68,0.25)',
+                color: '#ef4444',
+                fontSize: 11,
+                cursor: 'pointer',
+                fontWeight: 600,
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(239,68,68,0.2)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(239,68,68,0.1)';
+              }}
+              title="Simulate server disconnect (dev only)"
+            >
+              Kill Server
+            </button>
+          )}
         </div>
         <UpdateBanner />
+        <ReconnectBanner />
         {(page === 'dashboard' || page === 'listings') && (
           <CharacterTabs
             characters={characters}
@@ -340,7 +378,7 @@ export default function App() {
           {page === 'profile' && profileTarget && (
             <Profile
               playerName={profileTarget}
-              onBack={() => setPage('dashboard')}
+              onBack={() => setPage(profileReturnPage)}
             />
           )}
           {page === 'settings' && <Settings />}

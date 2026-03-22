@@ -12,18 +12,36 @@ import { BinaryWriter } from '../core/network/serialization/binary-writer';
 import { ClientOpCode, ServerOpCode } from '../core/network/packets/op-codes';
 import { ExchangeClientAction } from '../core/network/packets/exchange/exchange-types';
 import { ConnectionPhase } from '../core/proxy/connection-state';
-import { launchClient, readCharacterName, closeClientHandles, type LaunchedClient } from '../core/launcher/client-launcher';
+import { launchClient, readCharacterName, closeClientHandles, terminateClient, clickThroughLoginScreens, type LaunchedClient } from '../core/launcher/client-launcher';
 import * as db from '../core/db/database';
 import type { MerchantListing } from '../core/models/listing';
 import { AeApiClient } from '../core/ae/ae-api-client';
 import { ItemCache } from '../core/ae/item-cache';
 import { ListingSync } from '../core/ae/listing-sync';
+import { patchDisplayAisling } from '../core/engine/display-modifier';
+import { ReconnectManager } from '../core/reconnect/reconnect-manager';
+
 
 let mainWindow: BrowserWindow | null = null;
 let proxyServer: ProxyServer | null = null;
 const merchantHub = new MerchantHubClient();
 const launchedClients: Map<number, LaunchedClient> = new Map();
 const PROXY_PORT = 2615; // Local proxy port — avoids 2610-2612 which bots commonly bind
+import { injectLogin } from '../core/reconnect/login-injector';
+
+// Auto-reconnect manager — re-launches DA clients after server restarts
+const reconnectManager = new ReconnectManager(async (_username, _password) => {
+  const clientPath = db.getSetting('client_path', 'C:\\Program Files (x86)\\KRU\\Dark Ages\\Darkages.exe');
+  if (!proxyServer?.isListening()) startProxy();
+  const client = launchClient(clientPath, { localPort: PROXY_PORT, skipIntro: true });
+  launchedClients.set(client.processId, client);
+  // Click through Notification OK and Continue via mouse (background, non-blocking)
+  // Login itself is handled via packet injection when LoginControls arrives
+  clickThroughLoginScreens(client.processId).catch((err) => {
+    console.error('[Reconnect] Click-through error:', err);
+  });
+  return { success: true, processId: client.processId };
+});
 
 // AE integration modules
 const aeClient = new AeApiClient();
@@ -40,6 +58,7 @@ interface CharacterContext {
   locationTracker: LocationTracker;
 }
 const characterContexts: Map<string, CharacterContext> = new Map();
+const groupRefreshIntervals: Map<string, ReturnType<typeof setInterval>> = new Map();
 
 // Packet log buffer for the sniffer UI
 const packetLog: { direction: string; opCode: number; dataHex: string; timestamp: number; characterName?: string }[] = [];
@@ -173,11 +192,16 @@ function createCharacterContext(characterName: string, connection: ProxyConnecti
       }
       recentAutoReplies.set(playerKey, Date.now());
       injectWhisper(characterName, whisper.playerName, msg);
-    } else {
-      const template = db.getSetting('reply_not_found', "Sorry, I don't have that item for sale.");
+    } else if (isListKeyword(whisper.message)) {
+      // Keyword trigger — send full listing summary, split across multiple whispers if needed
+      const summary = formatListingSummary(engine.getListings());
+      const messages = splitWhisperMessage(summary);
       recentAutoReplies.set(playerKey, Date.now());
-      injectWhisper(characterName, whisper.playerName, template);
+      messages.forEach((msg, i) => {
+        setTimeout(() => injectWhisper(characterName, whisper.playerName, msg), i * 400);
+      });
     }
+    // No match and no keyword — ignore (don't reply to general conversation)
   });
 
   engine.on('exchangeStarted', (name: string) => {
@@ -357,6 +381,58 @@ function createCharacterContext(characterName: string, connection: ProxyConnecti
     pushHubUpdate();
   });
 
+  // --- Merchant Group Title ---
+  // Automatically create/maintain a group with the merchant title when active listings exist.
+  // The server dissolves solo groups after ~30-60s, so we re-send on a 25s interval.
+  let groupActive = false;
+  let currentGroupTitle = '';
+  let currentGroupDesc = '';
+  const GROUP_REFRESH_MS = 25_000;
+
+  function updateMerchantGroup() {
+    const groupEnabled = db.getSetting(`group_enabled:${characterName}`, 'true') === 'true';
+    const activeListings = engine.getListings().filter(l => l.status === 'ACTIVE' && l.quantityRemaining > 0);
+    const shouldHaveGroup = groupEnabled && activeListings.length > 0;
+
+    const title = db.getSetting(`group_title:${characterName}`, 'Merchant');
+    const description = db.getSetting(`group_description:${characterName}`, "Check AislingExchange for listings or whisper 'whats for sale?'");
+
+    if (shouldHaveGroup) {
+      injectGroupCreate(characterName, title, description);
+      groupActive = true;
+      currentGroupTitle = title;
+      currentGroupDesc = description;
+
+      // Start refresh interval if not already running — the server dissolves solo groups
+      if (!groupRefreshIntervals.has(characterName)) {
+        const interval = setInterval(() => {
+          if (groupActive) {
+            const t = db.getSetting(`group_title:${characterName}`, 'Merchant');
+            const d = db.getSetting(`group_description:${characterName}`, "Check AislingExchange for listings or whisper 'whats for sale?'");
+            injectGroupCreate(characterName, t, d);
+          }
+        }, GROUP_REFRESH_MS);
+        groupRefreshIntervals.set(characterName, interval);
+      }
+    } else if (groupActive) {
+      injectGroupDisband(characterName);
+      groupActive = false;
+      currentGroupTitle = '';
+      currentGroupDesc = '';
+      const interval = groupRefreshIntervals.get(characterName);
+      if (interval) {
+        clearInterval(interval);
+        groupRefreshIntervals.delete(characterName);
+      }
+    }
+  }
+
+  // Update group when listings change
+  engine.on('listingsUpdated', () => {
+    // Small delay to let DB writes settle
+    setTimeout(() => updateMerchantGroup(), 300);
+  });
+
   // Determine connection type: check if any launched process has this character name
   let connectionType: 'launched' | 'bot' = 'bot';
   for (const [pid] of launchedClients) {
@@ -397,12 +473,52 @@ function startProxy() {
     packetLog.push(entry);
     if (packetLog.length > MAX_PACKET_LOG) packetLog.shift();
 
+    // Auto-reconnect: inject Login packet when LoginControls (0x66) arrives
+    // on the GAME SERVER connection (after redirect, not the initial login server).
+    // The Notification OK and Continue clicks are handled via mouse automation.
+    const isPostRedirect = connection.connectionState.characterName !== '';
+    if (direction === 'server' && opCode === ServerOpCode.LoginControls && reconnectManager.isReconnecting() && isPostRedirect) {
+      if (!(connection as any)._reconnectSentLogin) {
+        (connection as any)._reconnectSentLogin = true;
+        const launchingChar = reconnectManager.getCurrentlyLaunching();
+        if (launchingChar) {
+          const creds = reconnectManager.getReconnectingCredentials(launchingChar);
+          if (creds) {
+            // Delay login injection until after mouse automation clicks through
+            // Notification OK (~6s) and Continue (~3s) = ~10s after launch
+            setTimeout(() => {
+              console.log(`[Reconnect] Injecting login for ${launchingChar} (user=${creds.username})`);
+              injectLogin(connection, creds.username, creds.password);
+            }, 12000);
+          }
+        }
+      }
+    }
+
     // Only create context once the connection is fully in-game
     const isInGame = connection.connectionState.phase === ConnectionPhase.IN_GAME;
     if (charName && isInGame && !characterContexts.has(charName)) {
       const ctx = createCharacterContext(charName, connection);
       characterContexts.set(charName, ctx);
+
+      // Clear reconnect state if this character was being reconnected
+      if (reconnectManager.isReconnecting(charName)) {
+        reconnectManager.onCharacterConnected(charName);
+      }
+
+      // Migrate global group settings to per-character keys on first connect
+      for (const gKey of ['group_enabled', 'group_title', 'group_description']) {
+        const perCharKey = `${gKey}:${charName}`;
+        if (!db.getSetting(perCharKey, '')) {
+          const globalVal = db.getSetting(gKey, '');
+          if (globalVal) db.setSetting(perCharKey, globalVal);
+        }
+      }
+
       send('characters:connected', { name: charName, connectionType: ctx.connectionType });
+
+      // Register display packet transformer to show merchant names above heads
+      registerMerchantDisplayTransformer(connection);
 
       // Replay any packets that were buffered before context creation (inventory, stats, etc.)
       const buffered = preContextPacketBuffer.get(charName);
@@ -427,13 +543,21 @@ function startProxy() {
         // Auto-import AE listings for this character after inventory loads
         importAeListings(charName).then(r => {
           if (r.imported > 0) console.log(`[AE AutoSync] Imported ${r.imported} listing(s) for ${charName} on connect`);
-        }).catch(() => {});
+        }).catch(() => {}).finally(() => {
+          // Create merchant group title after listings are loaded/imported
+          const charCtx = characterContexts.get(charName);
+          if (charCtx) {
+            // @ts-ignore — access the updateMerchantGroup closure from the context setup
+            charCtx.engine.emit('listingsUpdated', charCtx.engine.getListings());
+          }
+        });
       }, 500);
     }
 
     // Update connection reference (may change after redirect)
     if (charName && isInGame && characterContexts.has(charName)) {
       characterContexts.get(charName)!.connection = connection;
+      registerMerchantDisplayTransformer(connection);
     }
 
     // Forward client packets to location tracker (for walk tracking)
@@ -504,6 +628,18 @@ function startProxy() {
 
       if (matchedName) {
         const ctx = characterContexts.get(matchedName)!;
+        // Capture state before cleanup for potential auto-reconnect
+        const wasLaunched = ctx.connectionType === 'launched';
+        const savedUsername = connection.connectionState.username;
+        const savedPassword = connection.connectionState.password;
+
+        // Disband merchant group and clear refresh interval before cleanup
+        try { injectGroupDisband(matchedName); } catch { /* connection may already be gone */ }
+        const grpInterval = groupRefreshIntervals.get(matchedName);
+        if (grpInterval) {
+          clearInterval(grpInterval);
+          groupRefreshIntervals.delete(matchedName);
+        }
         ctx.engine.removeAllListeners();
         ctx.inventoryTracker.removeAllListeners();
         ctx.inventoryTracker.clear();
@@ -514,6 +650,37 @@ function startProxy() {
         send('characters:disconnected', matchedName);
         console.log(`[MerchantMode] Character disconnected: ${matchedName}`);
         pushHubUpdate();
+
+        // Auto-reconnect: if the SERVER dropped us (not user closing the client),
+        // and this was a launched client with captured credentials, schedule reconnect
+        console.log(`[Reconnect] Disconnect analysis: reason=${connection.disconnectReason}, launched=${wasLaunched}, hasCredentials=${!!(savedUsername && savedPassword)}`);
+        if (connection.disconnectReason === 'server' && wasLaunched && savedUsername && savedPassword) {
+          const autoReconnectEnabled = db.getSetting('auto_reconnect_enabled', 'true') === 'true';
+          if (autoReconnectEnabled && !reconnectManager.isReconnecting(matchedName)) {
+            // Kill the old DA client process — it's sitting at a "Disconnected" dialog
+            // and we need to launch a fresh one that will connect cleanly
+            for (const [pid, client] of launchedClients) {
+              try {
+                const name = readCharacterName(pid);
+                if (name === matchedName) {
+                  console.log(`[Reconnect] Killing old DA client (PID ${pid}) for ${matchedName}`);
+                  terminateClient(client);
+                  launchedClients.delete(pid);
+                  break;
+                }
+              } catch {
+                // Process already gone — clean up
+                closeClientHandles(client);
+                launchedClients.delete(pid);
+              }
+            }
+            console.log(`[Reconnect] Server disconnect detected for ${matchedName}, scheduling reconnect`);
+            reconnectManager.scheduleReconnect(matchedName, savedUsername, savedPassword);
+          } else if (reconnectManager.isReconnecting(matchedName)) {
+            // Connection failed during a reconnect attempt (server still down) — retry
+            reconnectManager.scheduleRetry(matchedName);
+          }
+        }
       }
     }
     // Clean up any launched client entries whose processes are no longer alive
@@ -539,6 +706,18 @@ function startProxy() {
 merchantHub.on('merchantsUpdated', (merchants) => {
   send('merchants:updated', merchants);
 });
+
+// --- Merchant display transformer ---
+
+function registerMerchantDisplayTransformer(connection: ProxyConnection): void {
+  connection.registerServerTransformer(ServerOpCode.DisplayAisling, (data) => {
+    const names = new Set<string>();
+    for (const m of merchantHub.getMerchants()) {
+      names.add(m.name.toLowerCase());
+    }
+    return patchDisplayAisling(data, names);
+  });
+}
 
 // --- Packet injection helpers ---
 
@@ -597,11 +776,120 @@ function injectExchangeSetGold(characterName: string, targetId: number, amount: 
   conn.injectClientPacket(ClientOpCode.Exchange, writer.toArray());
 }
 
+function injectGroupCreate(characterName: string, groupTitle: string, groupDescription: string) {
+  const conn = getConnectionForCharacter(characterName);
+  if (!conn) return;
+  const writer = new BinaryWriter();
+  writer.writeUint8(0x04); // Create group action
+  writer.writeString8(characterName);
+  writer.writeString8(groupTitle);
+  writer.writeString8(groupDescription);
+  // Trailing flags: allow invite=no, open=no, max=1, class restriction flags
+  writer.writeBytes(new Uint8Array([0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01]));
+  conn.injectClientPacket(ClientOpCode.GroupRequest, writer.toArray());
+  console.log(`[MerchantMode:${characterName}] Group created: "${groupTitle}" - ${groupDescription}`);
+}
+
+function injectGroupDisband(characterName: string) {
+  const conn = getConnectionForCharacter(characterName);
+  if (!conn) return;
+  const writer = new BinaryWriter();
+  writer.writeUint8(0x04); // Same create/update action with empty strings to disband
+  writer.writeString8(characterName);
+  writer.writeString8('');
+  writer.writeString8('');
+  writer.writeBytes(new Uint8Array([0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01]));
+  conn.injectClientPacket(ClientOpCode.GroupRequest, writer.toArray());
+  console.log(`[MerchantMode:${characterName}] Group disbanded`);
+}
+
 function formatGold(amount: number): string {
   if (amount >= 1_000_000_000) return `${(amount / 1_000_000_000).toFixed(1)}B`;
   if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(1)}M`;
   if (amount >= 1_000) return `${(amount / 1_000).toFixed(1)}K`;
   return amount.toString();
+}
+
+// --- Smart Auto-Whisper Helpers ---
+
+const LIST_KEYWORDS = [
+  "what's for sale", "whats for sale",
+  "what's for buy", "whats for buy",
+  "what's for trade", "whats for trade",
+  "wts", "wtb", "wtt", "list",
+  "sale", "buy", "trade", "selling", "buying", "trading",
+  "for sale", "shop", "merchant", "stock", "inventory",
+  "price", "prices", "how much",
+];
+
+// Normalize smart/curly quotes and other unicode variants to ASCII before keyword matching
+function normalizeMessage(msg: string): string {
+  return msg
+    .replace(/[\u2018\u2019\u201A\u0060\u00B4]/g, "'")  // curly single quotes -> '
+    .replace(/[\u201C\u201D\u201E]/g, '"');               // curly double quotes -> "
+}
+
+function isListKeyword(message: string): boolean {
+  const lower = normalizeMessage(message).toLowerCase().trim();
+  for (const kw of LIST_KEYWORDS) {
+    if (kw.length <= 4) {
+      const re = new RegExp(`\\b${kw}\\b`);
+      if (re.test(lower)) return true;
+    } else {
+      if (lower.includes(kw)) return true;
+    }
+  }
+  return false;
+}
+
+function formatListingSummary(listings: MerchantListing[]): string {
+  const active = listings.filter(l => l.status === 'ACTIVE' && l.quantityRemaining > 0);
+  if (active.length === 0) return 'No items listed right now.';
+
+  const groups: Record<string, string[]> = { SELL: [], BUY: [], TRADE: [] };
+  for (const l of active) {
+    if (l.type === 'TRADE') {
+      const wanted = l.wantedItems?.[0]?.name ?? '?';
+      groups.TRADE.push(`${l.itemName} for ${wanted}`);
+    } else {
+      groups[l.type].push(`${l.itemName} ${formatGold(l.price)}`);
+    }
+  }
+
+  const parts: string[] = [];
+  for (const type of ['SELL', 'BUY', 'TRADE']) {
+    if (groups[type].length > 0) {
+      parts.push(`[${type}] ${groups[type].join(' | ')}`);
+    }
+  }
+  return parts.join(' | ');
+}
+
+const MAX_WHISPER_LEN = 255;
+const MAX_REPLY_WHISPERS = 5;
+
+function splitWhisperMessage(fullMessage: string): string[] {
+  if (fullMessage.length <= MAX_WHISPER_LEN) return [fullMessage];
+
+  const separator = ' | ';
+  const segments = fullMessage.split(separator);
+  const messages: string[] = [];
+  let current = '';
+
+  for (const seg of segments) {
+    const candidate = current ? current + separator + seg : seg;
+    if (candidate.length <= MAX_WHISPER_LEN) {
+      current = candidate;
+    } else {
+      if (current) messages.push(current);
+      current = seg.length > MAX_WHISPER_LEN
+        ? seg.substring(0, MAX_WHISPER_LEN - 3) + '...'
+        : seg;
+    }
+  }
+  if (current) messages.push(current);
+
+  return messages.slice(0, MAX_REPLY_WHISPERS);
 }
 
 // --- AE Listing Import ---
@@ -943,10 +1231,27 @@ function registerIpcHandlers() {
 
   // Settings
   ipcMain.handle('settings:get', (_e, key: string, defaultValue?: string) => db.getSetting(key, defaultValue));
-  ipcMain.handle('settings:set', (_e, key: string, value: string) => { db.setSetting(key, value); });
+  ipcMain.handle('settings:set', (_e, key: string, value: string) => {
+    db.setSetting(key, value);
+    // If a per-character group setting changed, refresh only that character's merchant group
+    if (key.startsWith('group_enabled:') || key.startsWith('group_title:') || key.startsWith('group_description:')) {
+      const charName = key.substring(key.indexOf(':') + 1);
+      const ctx = characterContexts.get(charName);
+      if (ctx) {
+        ctx.engine.emit('listingsUpdated', ctx.engine.getListings());
+      }
+    }
+  });
+
+  // Auto-reconnect
+  ipcMain.handle('reconnect:getState', () => reconnectManager.getState());
+  ipcMain.handle('reconnect:cancel', (_e, characterName: string) => reconnectManager.cancelReconnect(characterName));
+  ipcMain.handle('reconnect:cancelAll', () => reconnectManager.cancelAll());
+  reconnectManager.on('status', (data) => send('reconnect:status', data));
 
   // Auto-updater
   ipcMain.handle('updater:check', () => autoUpdater.checkForUpdates().catch(() => {}));
+  ipcMain.handle('updater:download', () => autoUpdater.downloadUpdate().catch(() => {}));
   ipcMain.handle('updater:install', () => autoUpdater.quitAndInstall());
   ipcMain.handle('updater:version', () => app.getVersion());
 
@@ -954,6 +1259,21 @@ function registerIpcHandlers() {
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
     if (url.startsWith('https://')) shell.openExternal(url);
   });
+
+  // Debug: simulate server disconnect (dev only)
+  ipcMain.handle('debug:isDev', () => !app.isPackaged);
+  if (!app.isPackaged) {
+    ipcMain.handle('debug:simulateServerDisconnect', () => {
+      const conn = proxyServer?.getActiveConnection();
+      if (conn) {
+        console.log('[Debug] Simulating server disconnect — destroying server socket');
+        // Access the private serverSocket to simulate server-side close
+        (conn as any).serverSocket?.destroy();
+        return { success: true };
+      }
+      return { success: false, error: 'No active connection' };
+    });
+  }
 
   // Client launcher
   ipcMain.handle('launcher:launch', async () => {
@@ -994,8 +1314,9 @@ function registerIpcHandlers() {
 // --- Auto-updater ---
 
 function setupAutoUpdater() {
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  const autoUpdateEnabled = db.getSetting('auto_update_enabled', 'true') === 'true';
+  autoUpdater.autoDownload = autoUpdateEnabled;
+  autoUpdater.autoInstallOnAppQuit = autoUpdateEnabled;
 
   autoUpdater.on('checking-for-update', () => {
     send('updater:status', { status: 'checking' });
@@ -1021,11 +1342,13 @@ function setupAutoUpdater() {
     send('updater:status', { status: 'error', message: err.message });
   });
 
-  // Check for updates on launch, then every 30 minutes
-  autoUpdater.checkForUpdates().catch(() => {});
-  setInterval(() => {
+  // When auto-update is enabled, check on launch and every 30 minutes
+  if (autoUpdateEnabled) {
     autoUpdater.checkForUpdates().catch(() => {});
-  }, 30 * 60 * 1000);
+    setInterval(() => {
+      autoUpdater.checkForUpdates().catch(() => {});
+    }, 30 * 60 * 1000);
+  }
 }
 
 // --- App lifecycle ---
@@ -1048,6 +1371,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  reconnectManager.cancelAll();
   merchantHub.disconnect();
   proxyServer?.stop();
   itemCache.dispose();

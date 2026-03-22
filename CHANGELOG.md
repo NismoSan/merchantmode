@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.1.5
+
+### New Features
+- **Drop-to-trade (no whisper required)** — when you have exactly 1 active listing, players can drop gold or items directly on your character to start a trade without needing to whisper first; the engine auto-matches the only listing and handles the exchange automatically
+- **Merchant group title** — your character now automatically creates and maintains an in-game group with a customizable title and description while you have active listings; the group auto-refreshes every 25s (since the server dissolves solo groups) and disbands on disconnect; title and description configurable in Settings
+- **Smart whisper keywords** — players can whisper keywords like "whats for sale", "list", "wts", "wtb", or "wtt" to get a formatted summary of all your active listings; long responses are automatically split across multiple whispers; unrecognized whispers are now silently ignored instead of sending a "not found" reply
+- **Merchant name display** — other merchants from the global network now appear with `[M]` prefixed to their name, displayed persistently above their head (guild-member style) via a new server packet transformer system
+- **Manual update control** — auto-update can now be toggled off in Settings; when disabled, you can still check for and download updates manually from the About page; new "Download Update" button appears when auto-update is off
+
+### Improvements
+- **Profile navigation** — "View Profile" on merchant cards now opens the in-app profile page instead of an external link and correctly returns you to the page you came from
+- **AE API cache expiry** — avatar and sprite caches now expire after 10 minutes instead of lasting forever, so profile changes on AislingExchange are reflected sooner; added `refreshPlayerCache()` for manual invalidation
+
+### Changes from v1.1.2
+- `core/engine/display-modifier.ts` — **new file**: patches DisplayAisling (0x33) packets in-flight to prefix merchant names with `[M]` and set persistent display style
+- `core/engine/merchant-engine.ts` — auto-match single active listing when exchange opens without a prior whisper (drop-to-trade)
+- `core/proxy/proxy-connection.ts` — added `serverPacketTransformers` map and `registerServerTransformer()` method; server→client packets now run through transformer pipeline before re-encryption
+- `electron/main.ts` — merchant group create/disband/refresh logic with `injectGroupCreate`/`injectGroupDisband`; `registerMerchantDisplayTransformer` for `[M]` name display; smart whisper keyword detection with `isListKeyword`, `formatListingSummary`, `splitWhisperMessage`; group settings reactivity on settings change; auto-updater respects `auto_update_enabled` setting; new `updater:download` IPC handler; group refresh intervals cleaned up on disconnect
+- `electron/preload.ts` — added `updater.download` IPC bridge
+- `src/App.tsx` — profile navigation tracks return page via `profileReturnPage` state
+- `src/components/AllMerchantsView.tsx` — "View Profile" opens in-app profile via `onViewProfile` callback instead of external link
+- `src/components/UpdateBanner.tsx` — respects `auto_update_enabled` setting; shows "Download" button when auto-update is disabled
+- `src/lib/ae-api.ts` — cache entries now have timestamps with 10-minute TTL; added `refreshPlayerCache()` export
+- `src/pages/About.tsx` — respects `auto_update_enabled` setting; shows "Download Update" button when auto-update is disabled
+- `src/pages/Settings.tsx` — new "Merchant Group Title" section with enable toggle, title, and description fields; new "Updates" section with auto-update toggle
+- `src/vite-env.d.ts` — added `download` to updater type declaration
+
 ## v1.1.2
 
 ### New Features

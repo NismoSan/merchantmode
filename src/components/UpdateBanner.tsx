@@ -11,10 +11,13 @@ type UpdateStatus = {
 export default function UpdateBanner() {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true);
 
   useEffect(() => {
     const api = window.merchantMode;
     if (!api?.updater) return;
+
+    api.settings.get('auto_update_enabled', 'true').then((v) => setAutoUpdateEnabled(v === 'true'));
 
     api.updater.onStatus((data) => {
       setUpdate(data);
@@ -54,7 +57,10 @@ export default function UpdateBanner() {
       )}
 
       <span style={{ color: 'var(--color-text-primary)', flex: 1 }}>
-        {update.status === 'available' && `Update v${update.version} is available — downloading...`}
+        {update.status === 'available' && (autoUpdateEnabled
+          ? `Update v${update.version} is available — downloading...`
+          : `Update v${update.version} is available.`
+        )}
         {update.status === 'downloading' && `Downloading update... ${update.percent ?? 0}%`}
         {update.status === 'ready' && `v${update.version} is ready to install.`}
       </span>
@@ -76,6 +82,21 @@ export default function UpdateBanner() {
             transition: 'width 300ms ease',
           }} />
         </div>
+      )}
+
+      {update.status === 'available' && !autoUpdateEnabled && (
+        <button
+          onClick={() => window.merchantMode?.updater.download()}
+          className="btn-primary"
+          style={{
+            padding: '5px 14px',
+            borderRadius: 6,
+            fontSize: 12,
+          }}
+        >
+          <Download size={12} />
+          Download
+        </button>
       )}
 
       {update.status === 'ready' && (

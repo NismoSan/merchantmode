@@ -112,6 +112,7 @@ export class MerchantEngine extends EventEmitter {
 
     switch (opCode) {
       case ServerOpCode.ServerMessage:
+      case ServerOpCode.ChatMessage:
         this.handleWorldMessage(data);
         break;
       case ServerOpCode.Exchange:
@@ -319,6 +320,32 @@ export class MerchantEngine extends EventEmitter {
     this.emit('stateChanged', this.state);
     this.emit('exchangeStarted', targetName);
 
+    // If no whisper queued for this player (e.g. they dropped gold/items directly),
+    // and there's exactly one active listing, auto-match it so tryAutoFill works.
+    const hasQueuedWhisper = this.whisperQueue.some(
+      (w) => w.playerName === targetName && w.matchedListing,
+    );
+    if (!hasQueuedWhisper) {
+      const activeListings = this.listings.filter(
+        (l) => l.status === 'ACTIVE' && l.quantityRemaining > 0,
+      );
+      if (activeListings.length === 1) {
+        const listing = activeListings[0];
+        const syntheticRequest: WhisperRequest = {
+          playerName: targetName,
+          message: `[auto-matched: ${listing.itemName}]`,
+          timestamp: Date.now(),
+          matchedListing: listing,
+          requestedQuantity: listing.type === 'TRADE' ? 1 : (listing.stackSize || 1),
+        };
+        this.whisperQueue.push(syntheticRequest);
+        console.log(`[MerchantEngine] No whisper from "${targetName}" but only 1 active listing ("${listing.itemName}") — auto-matched`);
+        this.emit('whisperReceived', syntheticRequest);
+      } else {
+        console.log(`[MerchantEngine] No whisper from "${targetName}" and ${activeListings.length} active listings — cannot auto-match`);
+      }
+    }
+
     // Set timeout
     this.exchangeTimeout = setTimeout(() => {
       console.log('[MerchantEngine] Exchange timeout');
@@ -442,7 +469,26 @@ export class MerchantEngine extends EventEmitter {
     }
 
     const listing = queuedRequest.matchedListing;
-    const requestedQty = queuedRequest.requestedQuantity;
+    let requestedQty = queuedRequest.requestedQuantity;
+
+    // For auto-matched SELL listings (drop-to-trade, no whisper), calculate quantity
+    // from the gold they offered so they get as many units as their gold covers.
+    if (listing.type === 'SELL' && queuedRequest.message.startsWith('[auto-matched:')) {
+      const pricePerUnit = listing.stackSize
+        ? listing.price / listing.stackSize
+        : listing.price;
+      if (pricePerUnit > 0 && this.currentExchange.theirGold > 0) {
+        let maxQty = Math.floor(this.currentExchange.theirGold / pricePerUnit);
+        maxQty = Math.min(maxQty, listing.quantityRemaining);
+        if (listing.stackSize && listing.stackSize > 0) {
+          maxQty = Math.floor(maxQty / listing.stackSize) * listing.stackSize;
+        }
+        if (maxQty >= 1) {
+          requestedQty = maxQty;
+          queuedRequest.requestedQuantity = maxQty;
+        }
+      }
+    }
 
     // If stackSize is set, price covers the whole stack; otherwise price is per-unit
     const totalPrice = listing.stackSize

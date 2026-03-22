@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Monitor, Activity, TrendingUp, Coins, Package, MessageCircle } from 'lucide-react';
+import { Monitor, Activity, TrendingUp, Coins, Package, MessageCircle, Users } from 'lucide-react';
 import WhisperQueue from '../components/WhisperQueue';
 import InventoryView from '../components/InventoryView';
 import CreateListingModal from '../components/CreateListingModal';
@@ -18,6 +18,9 @@ export default function Dashboard({ proxyStatus, engineState, characterName }: P
   const [gold, setGold] = useState(0);
   const [todayTrades, setTodayTrades] = useState(0);
   const [modalItem, setModalItem] = useState<PrefillItem | null>(null);
+  const [groupEnabled, setGroupEnabled] = useState(true);
+  const [groupTitle, setGroupTitle] = useState('Merchant');
+  const [groupDescription, setGroupDescription] = useState("Check AislingExchange for listings or whisper 'whats for sale?'");
 
   useEffect(() => {
     const api = window.merchantMode;
@@ -27,6 +30,9 @@ export default function Dashboard({ proxyStatus, engineState, characterName }: P
       setInventory([]);
       setGold(0);
       setTodayTrades(0);
+      setGroupEnabled(true);
+      setGroupTitle('Merchant');
+      setGroupDescription("Check AislingExchange for listings or whisper 'whats for sale?'");
       return;
     }
 
@@ -34,6 +40,10 @@ export default function Dashboard({ proxyStatus, engineState, characterName }: P
     api.engine.getWhispers(characterName).then(setWhispers);
     api.inventory.get(characterName).then(setInventory);
     api.inventory.getGold(characterName).then(setGold);
+
+    api.settings.get(`group_enabled:${characterName}`, 'true').then((v) => setGroupEnabled(v === 'true'));
+    api.settings.get(`group_title:${characterName}`, 'Merchant').then(setGroupTitle);
+    api.settings.get(`group_description:${characterName}`, "Check AislingExchange for listings or whisper 'whats for sale?'").then(setGroupDescription);
 
     const today = new Date().toISOString().split('T')[0];
     api.transactions.getByDate(today, today).then((txs) => setTodayTrades(txs.length));
@@ -76,6 +86,11 @@ export default function Dashboard({ proxyStatus, engineState, characterName }: P
     if (!api || !characterName) return;
     const all = await api.listings.getAll(characterName);
     setListings(all);
+  }
+
+  function saveGroupSetting(key: string, value: string) {
+    if (!characterName) return;
+    window.merchantMode?.settings.set(`${key}:${characterName}`, value);
   }
 
   function handleInventoryItemClick(item: any) {
@@ -170,10 +185,82 @@ export default function Dashboard({ proxyStatus, engineState, characterName }: P
         ))}
       </div>
 
+      {/* Merchant Group Title */}
+      <div className="section-card animate-slide-up" style={{ animationDelay: '260ms' }}>
+        <div className="section-header">
+          <Users size={16} className="section-icon" />
+          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }} className="gold-text">Merchant Group Title</h3>
+        </div>
+        <div
+          className="flex items-center justify-between cursor-pointer"
+          onClick={() => {
+            const next = !groupEnabled;
+            setGroupEnabled(next);
+            saveGroupSetting('group_enabled', next.toString());
+          }}
+          style={{
+            padding: '12px 14px',
+            borderRadius: 8,
+            background: 'var(--color-surface-200)',
+            border: '1px solid var(--color-surface-500)',
+            transition: 'border-color 200ms ease',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(201,168,76,0.3)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--color-surface-500)'; }}
+        >
+          <div>
+            <span style={{ fontSize: 13, color: 'var(--color-text-primary)', fontWeight: 500 }}>Display group title</span>
+            <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+              Show a title above this character's name while merchant mode is active
+            </p>
+          </div>
+          <div
+            className="toggle-track"
+            style={{
+              background: groupEnabled
+                ? 'linear-gradient(135deg, #dbb85e, #b8973e)'
+                : 'var(--color-surface-500)',
+              marginLeft: 16,
+            }}
+          >
+            <div className="toggle-thumb" style={{ left: groupEnabled ? 22 : 2 }} />
+          </div>
+        </div>
+        {groupEnabled && (
+          <div className="space-y-3 mt-3 pt-3" style={{ borderTop: '1px solid var(--color-surface-500)' }}>
+            <label style={{ display: 'block' }}>
+              <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 4, display: 'block' }}>Group title</span>
+              <input
+                type="text"
+                value={groupTitle}
+                onChange={(e) => setGroupTitle(e.target.value)}
+                onBlur={() => saveGroupSetting('group_title', groupTitle)}
+                className="settings-input"
+                style={{ width: '100%', fontSize: 13 }}
+              />
+            </label>
+            <label style={{ display: 'block' }}>
+              <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 4, display: 'block' }}>Group description</span>
+              <input
+                type="text"
+                value={groupDescription}
+                onChange={(e) => setGroupDescription(e.target.value)}
+                onBlur={() => saveGroupSetting('group_description', groupDescription)}
+                className="settings-input"
+                style={{ width: '100%', fontSize: 13 }}
+              />
+            </label>
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+              The title appears above your character's name in-game. The group is created automatically when you have active listings and disbanded when you disconnect.
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Inventory */}
       <div
         className="section-card animate-slide-up"
-        style={{ animationDelay: '260ms' }}
+        style={{ animationDelay: '320ms' }}
       >
         <InventoryView items={inventory} gold={gold} onItemClick={handleInventoryItemClick} />
       </div>
@@ -181,7 +268,7 @@ export default function Dashboard({ proxyStatus, engineState, characterName }: P
       {/* Whisper Queue */}
       <div
         className="section-card animate-slide-up"
-        style={{ animationDelay: '320ms' }}
+        style={{ animationDelay: '380ms' }}
       >
         <div className="section-header">
           <MessageCircle size={16} className="section-icon" />

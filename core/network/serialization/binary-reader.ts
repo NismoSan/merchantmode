@@ -1,5 +1,15 @@
 import type { Serializable } from './serializable';
 
+export class PacketReadError extends Error {
+  constructor(type: string, size: number, offset: number, bufferLength: number) {
+    super(
+      `Read past end of packet: tried to read ${type} (${size} bytes) at offset ${offset}, ` +
+      `but packet is only ${bufferLength} bytes`
+    );
+    this.name = 'PacketReadError';
+  }
+}
+
 export class BinaryReader {
   private buffer: Buffer;
   public offset: number;
@@ -9,37 +19,49 @@ export class BinaryReader {
     this.offset = 0;
   }
 
+  private ensureBytes(type: string, size: number): void {
+    if (this.offset + size > this.buffer.byteLength) {
+      throw new PacketReadError(type, size, this.offset, this.buffer.byteLength);
+    }
+  }
+
   readUint8(): number {
+    this.ensureBytes('uint8', 1);
     const value = this.buffer.readUint8(this.offset);
     this.offset += 1;
     return value;
   }
 
   readUint16(): number {
+    this.ensureBytes('uint16', 2);
     const value = this.buffer.readUint16BE(this.offset);
     this.offset += 2;
     return value;
   }
 
   readUint32(): number {
+    this.ensureBytes('uint32', 4);
     const value = this.buffer.readUint32BE(this.offset);
     this.offset += 4;
     return value;
   }
 
   readInt8(): number {
+    this.ensureBytes('int8', 1);
     const value = this.buffer.readUInt8(this.offset);
     this.offset += 1;
     return value;
   }
 
   readInt16(): number {
+    this.ensureBytes('int16', 2);
     const value = this.buffer.readInt16BE(this.offset);
     this.offset += 2;
     return value;
   }
 
   readInt32(): number {
+    this.ensureBytes('int32', 4);
     const value = this.buffer.readInt32BE(this.offset);
     this.offset += 4;
     return value;
@@ -49,6 +71,7 @@ export class BinaryReader {
     if (!length) {
       length = this.buffer.byteLength - this.offset;
     }
+    this.ensureBytes('string', length);
     const value = this.buffer.toString('ascii', this.offset, this.offset + length);
     this.offset += length;
     return value;
@@ -72,6 +95,7 @@ export class BinaryReader {
     if (!length) {
       length = this.buffer.byteLength - this.offset;
     }
+    this.ensureBytes('bytes', length);
     const value = this.buffer.subarray(this.offset, this.offset + length);
     this.offset += length;
     return value;

@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.2-c9a84c" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.1.6-c9a84c" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-blue" alt="Platform" />
   <img src="https://img.shields.io/badge/electron-41-47848f" alt="Electron" />
   <img src="https://img.shields.io/badge/react-19-61dafb" alt="React" />
@@ -70,6 +70,18 @@ Merchant Mode runs as a local TCP proxy between your Dark Ages client and the ga
 - **Bot client compatibility** — proxy runs on port 2615 to avoid conflicts with bot proxies on 2610–2612. Characters are auto-tagged as "launched" or "bot" based on origin, with a "BOT" badge in the character tabs.
 - **Multiple launched clients** — click "Launch Client" multiple times to run several DA clients simultaneously, each tracked independently.
 
+### Auto-Reconnect
+- Automatic reconnection when a character disconnects from the server (e.g., server restarts).
+- Sequential reconnection queue — characters reconnect one at a time with exponential backoff (5s → 15s → 30s → 30s).
+- Login packet injection — rebuilds and injects a full Login (0x03) packet with stored credentials, CRC16 checksums, and proper encryption.
+- Status tracking per character: waiting, launching, connected, cancelled, failed.
+- **Reconnect Banner** in the UI shows countdown timers and reconnection progress for each queued character.
+
+### Merchant Display Modifier
+- In-game display name patching — merchants with active listings show a `[M]` prefix on their character name visible to other players.
+- Modifies DisplayAisling (0x33) packets in real time as they pass through the proxy.
+- Best-effort: if the name can't be extracted from the packet, the original is forwarded unmodified.
+
 ### Real-Time Dashboard
 - Live 60-slot inventory grid with item sprites and quantities.
 - Gold balance display.
@@ -111,11 +123,12 @@ Merchant Mode runs as a local TCP proxy between your Dark Ages client and the ga
   - Redirect the server hostname to the local proxy.
   - Rewrite the server IP as a fallback.
   - Redirect the server port to 2615.
+- **Version validation** — verifies expected original bytes at each patch address before writing. Throws a clear "game version mismatch" error if the client binary doesn't match the expected DA v7.41 offsets, preventing silent memory corruption on game updates.
 - Extracts the character name from client memory after login.
 - Tracks launched processes and cleans up on disconnect.
 - Configurable client path via Settings with a file browser.
 
-### Auto-Updates
+### Auto-Update
 - Checks for updates on launch and every 30 minutes.
 - Downloads in the background with progress tracking.
 - Shows a banner with download progress bar when an update is available.
@@ -243,10 +256,11 @@ Each connected character gets a fully isolated context:
 | `InventoryTracker` | Tracks 60 inventory slots + gold balance |
 | `LocationTracker` | Tracks map name and x/y coordinates |
 | `EntityTracker` | Resolves player names to entity IDs |
+| `DisplayModifier` | Patches display packets with `[M]` merchant prefix |
 | Connection reference | Routes packets to the correct context |
 | Listing set | Per-character listings stored in SQLite |
 
-Packets are routed by character name. On disconnect, all trackers and listeners are cleaned up, and the character context is removed.
+Packets are routed by character name. On disconnect, all trackers and listeners are cleaned up, the character context is removed, and the `ReconnectManager` queues the character for automatic reconnection with exponential backoff.
 
 ### 5. Merchant Hub
 
@@ -297,7 +311,7 @@ Updates are pushed on listing changes, map changes, and periodic heartbeats. The
 
 ### 6. AislingExchange Sync
 
-The `ListingSync` module maintains a sync queue in SQLite. When a listing is created, updated, or deleted with the "Sync to AE" flag enabled, an operation is queued and processed asynchronously. Failed operations are retried with exponential backoff. The `AeApiClient` handles authentication, item search, listing CRUD, and price reporting with a rate limiter (20 requests/minute).
+The `ListingSync` module maintains a sync queue in SQLite. When a listing is created, updated, or deleted with the "Sync to AE" flag enabled, an operation is queued and processed asynchronously. Failed operations are retried with exponential backoff (1min → 4min → 16min based on attempt count, max 3 attempts). A circuit breaker pattern protects against cascading failures — after 3 consecutive API failures, the circuit opens and all sync operations queue directly without attempting the API for a 1-minute cooldown period, then allows a single probe request through (half-open state). The `AeApiClient` handles authentication, item search, listing CRUD, and price reporting with a rate limiter (20 requests/minute).
 
 ---
 
@@ -309,16 +323,20 @@ merchantmode/
 │   ├── ae/                              # AislingExchange API integration
 │   │   ├── ae-api-client.ts             #   REST client with auth, item search, listing sync, price reporting
 │   │   ├── item-cache.ts                #   Local SQLite cache for the AE item database
-│   │   └── listing-sync.ts             #   Bidirectional listing sync with queue and retry logic
+│   │   └── listing-sync.ts             #   Bidirectional listing sync with circuit breaker and exponential backoff
 │   ├── db/
 │   │   └── database.ts                  #   SQLite database (WAL mode) with versioned migrations
 │   ├── engine/
 │   │   ├── merchant-engine.ts           #   Trade state machine (IDLE → COMPLETE)
 │   │   ├── inventory-tracker.ts         #   60-slot inventory + gold tracking from packets
 │   │   ├── location-tracker.ts          #   Map name + x/y from server packets, emits locationChanged
-│   │   └── entity-tracker.ts            #   Player name → entity ID resolution for exchange initiation
+│   │   ├── entity-tracker.ts            #   Player name → entity ID resolution for exchange initiation
+│   │   └── display-modifier.ts          #   Patches DisplayAisling packets with [M] merchant prefix
 │   ├── launcher/
-│   │   └── client-launcher.ts           #   Win32 FFI (koffi) client memory patching
+│   │   └── client-launcher.ts           #   Win32 FFI (koffi) client memory patching with version validation
+│   ├── reconnect/
+│   │   ├── reconnect-manager.ts         #   Auto-reconnect queue with exponential backoff
+│   │   └── login-injector.ts            #   Builds and injects Login (0x03) packets for reconnection
 │   ├── models/
 │   │   ├── listing.ts                   #   Listing type/status/price/quantity interfaces
 │   │   ├── transaction.ts               #   Trade transaction record interfaces
@@ -349,7 +367,7 @@ merchantmode/
 │   │   │       ├── server-exchange.ts   #       Server→Client exchange events
 │   │   │       └── index.ts
 │   │   ├── serialization/               #   Binary protocol serialization
-│   │   │   ├── binary-reader.ts         #     Reading primitives from byte buffers
+│   │   │   ├── binary-reader.ts         #     Reading primitives from byte buffers with bounds checking
 │   │   │   ├── binary-writer.ts         #     Writing primitives to byte buffers
 │   │   │   ├── serializable.ts          #     Serializable interface
 │   │   │   └── index.ts
@@ -379,6 +397,7 @@ merchantmode/
 │   │   ├── PacketSniffer.tsx            #   Network packet debug view with opcode filter
 │   │   ├── PlayerProfileCard.tsx        #   Player profile modal (sprite, class, AE data, listings)
 │   │   ├── TransactionLog.tsx           #   Two-sided trade flow with avatars and type badges
+│   │   ├── ReconnectBanner.tsx           #   Auto-reconnect status with countdown timers
 │   │   ├── UpdateBanner.tsx             #   Auto-update notification with download progress bar
 │   │   └── WhisperQueue.tsx             #   Matched/unmatched whisper list with timestamps
 │   ├── lib/
@@ -521,10 +540,16 @@ All communication between the Electron main process and the React renderer goes 
 | `launcher:launch` | — | `{ success, processId?, error? }` | Launch DA client |
 | `launcher:browse` | — | `string \| null` | Browse for client path |
 | `launcher:getPath` | — | `string` | Current client path |
+| `reconnect:getState` | — | `ReconnectState[]` | Current reconnect queue state |
+| `reconnect:cancel` | `characterName` | — | Cancel reconnect for a character |
+| `reconnect:cancelAll` | — | — | Cancel all pending reconnects |
 | `updater:check` | — | — | Check for updates |
+| `updater:download` | — | — | Download available update |
 | `updater:install` | — | — | Quit and install update |
 | `updater:version` | — | `string` | Current app version |
 | `shell:openExternal` | `url` | — | Open URL in browser |
+| `debug:isDev` | — | `boolean` | Check if running in dev mode |
+| `debug:simulateServerDisconnect` | — | — | Simulate server disconnect (dev only) |
 
 ### Event Channels (Main → Renderer)
 
@@ -546,6 +571,7 @@ All communication between the Electron main process and the React renderer goes 
 | `listings:changed` | `{ characterName }` | Listings modified |
 | `merchants:updated` | `GlobalMerchant[]` | Merchant hub data updated |
 | `ae:authChanged` | `{ loggedIn, username, verified }` | AE auth state changed |
+| `reconnect:status` | `{ characterName, attempt, state, delay }` | Reconnect state changed |
 | `updater:status` | `{ status, version?, percent?, message? }` | Update status event |
 
 ---

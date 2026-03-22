@@ -74,9 +74,11 @@ export default function About() {
   const [version, setVersion] = useState('');
   const [updateVersion, setUpdateVersion] = useState('');
   const [percent, setPercent] = useState(0);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(true);
 
   useEffect(() => {
     window.merchantMode?.updater.getVersion().then(setVersion);
+    window.merchantMode?.settings.get('auto_update_enabled', 'true').then((v) => setAutoUpdateEnabled(v === 'true'));
     window.merchantMode?.updater.onStatus((data) => {
       setCheckState(data.status as UpdateCheckState);
       if (data.version) setUpdateVersion(data.version);
@@ -87,6 +89,10 @@ export default function About() {
   const handleCheck = () => {
     setCheckState('checking');
     window.merchantMode?.updater.check();
+  };
+
+  const handleDownload = () => {
+    window.merchantMode?.updater.download();
   };
 
   const features = [
@@ -306,6 +312,29 @@ export default function About() {
               <Download size={13} />
               Restart & Update
             </button>
+          ) : checkState === 'available' && !autoUpdateEnabled ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={handleDownload}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '7px 16px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #dbb85e, #b8973e)',
+                  color: '#fff',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  transition: 'all 200ms ease',
+                }}
+              >
+                <Download size={13} />
+                Download Update
+              </button>
+            </div>
           ) : (
             <button
               onClick={handleCheck}

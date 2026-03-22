@@ -11,4 +11,7 @@ export class ConnectionState {
   seed: number = 0;
   characterName: string = '';
   isLoggedIn: boolean = false;
+  /** Captured from the Login (0x03) packet during authentication */
+  username: string = '';
+  password: string = '';
 }

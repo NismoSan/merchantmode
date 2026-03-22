@@ -8,20 +8,42 @@ export interface AvatarData {
 
 const AVATAR_DEFAULTS: AvatarData = { offsetX: 50, offsetY: 20, zoom: 220 };
 
-const avatarCache = new Map<string, AvatarData>();
-const spriteCache = new Map<string, string | null>();
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+interface CacheEntry<T> {
+  value: T;
+  timestamp: number;
+}
+
+const avatarCache = new Map<string, CacheEntry<AvatarData>>();
+const spriteCache = new Map<string, CacheEntry<string | null>>();
+
+function isFresh<T>(entry: CacheEntry<T> | undefined): entry is CacheEntry<T> {
+  return !!entry && (Date.now() - entry.timestamp) < CACHE_TTL;
+}
+
+export function refreshPlayerCache(name?: string) {
+  if (name) {
+    const key = name.toLowerCase();
+    avatarCache.delete(key);
+    spriteCache.delete(key);
+  } else {
+    avatarCache.clear();
+    spriteCache.clear();
+  }
+}
 
 export async function getAvatarData(name: string): Promise<AvatarData> {
   const key = name.toLowerCase();
   const cached = avatarCache.get(key);
-  if (cached) return cached;
+  if (isFresh(cached)) return cached.value;
 
   try {
     const res = await api.ae.getAvatar(name);
     const data: AvatarData = res
       ? { offsetX: res.avatar_offset_x ?? 50, offsetY: res.avatar_offset_y ?? 20, zoom: res.avatar_zoom ?? 220 }
       : AVATAR_DEFAULTS;
-    avatarCache.set(key, data);
+    avatarCache.set(key, { value: data, timestamp: Date.now() });
     return data;
   } catch {
     return AVATAR_DEFAULTS;
@@ -30,19 +52,20 @@ export async function getAvatarData(name: string): Promise<AvatarData> {
 
 export async function getSpriteDataUrl(name: string): Promise<string | null> {
   const key = name.toLowerCase();
-  if (spriteCache.has(key)) return spriteCache.get(key) ?? null;
+  const cached = spriteCache.get(key);
+  if (isFresh(cached)) return cached.value;
 
   try {
     const base64 = await api.ae.getSprite(name);
     if (!base64) {
-      spriteCache.set(key, null);
+      spriteCache.set(key, { value: null, timestamp: Date.now() });
       return null;
     }
     const dataUrl = `data:image/png;base64,${base64}`;
-    spriteCache.set(key, dataUrl);
+    spriteCache.set(key, { value: dataUrl, timestamp: Date.now() });
     return dataUrl;
   } catch {
-    spriteCache.set(key, null);
+    spriteCache.set(key, { value: null, timestamp: Date.now() });
     return null;
   }
 }

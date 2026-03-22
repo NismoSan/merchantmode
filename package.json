@@ -1,6 +1,6 @@
 {
   "name": "merchantmode",
-  "version": "1.1.2",
+  "version": "1.1.6",
   "description": "Dark Ages AFK Merchant Automation App",
   "main": "dist-electron/electron/main.js",
   "scripts": {

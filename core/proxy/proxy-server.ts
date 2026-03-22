@@ -20,7 +20,8 @@ export class ProxyServer extends EventEmitter {
   private _isListening = false;
 
   // Pending redirect queue (like Arbiter's ConcurrentQueue<IPEndPoint>)
-  private pendingRedirects: { host: string; port: number }[] = [];
+  // Carries credentials from the login connection to the game server connection
+  private pendingRedirects: { host: string; port: number; username?: string; password?: string }[] = [];
 
   // Active connections
   private connections: ProxyConnection[] = [];
@@ -91,6 +92,9 @@ export class ProxyServer extends EventEmitter {
 
     if (pendingRedirect) {
       console.log(`[Proxy] Using pending redirect: ${remoteHost}:${remotePort}`);
+      // Propagate credentials from the login connection so they survive redirect
+      if (pendingRedirect.username) connection.connectionState.username = pendingRedirect.username;
+      if (pendingRedirect.password) connection.connectionState.password = pendingRedirect.password;
     }
 
     // Wire up events
@@ -100,7 +104,9 @@ export class ProxyServer extends EventEmitter {
 
     connection.on('redirect', (host: string, port: number) => {
       console.log(`[Proxy] Queuing redirect target: ${host}:${port}`);
-      this.pendingRedirects.push({ host, port });
+      // Carry credentials from the login connection to the game server connection
+      const { username, password } = connection.connectionState;
+      this.pendingRedirects.push({ host, port, username: username || undefined, password: password || undefined });
     });
 
     connection.on('disposed', () => {

@@ -41,6 +41,11 @@ export class ProxyConnection extends EventEmitter {
   private localPort: number;
   private disposed = false;
 
+  /** Why the connection was disposed — lets callers distinguish server restarts from user closes */
+  disconnectReason: 'server' | 'client' | 'unknown' = 'unknown';
+
+  private serverPacketTransformers: Map<number, (data: Uint8Array) => Uint8Array> = new Map();
+
   constructor(clientSocket: net.Socket, localPort: number) {
     super();
     this.clientSocket = clientSocket;
@@ -88,6 +93,7 @@ export class ProxyConnection extends EventEmitter {
 
     clientSocket.on('close', () => {
       console.log('[Proxy] Client disconnected');
+      this.disconnectReason = 'client';
       this.emit('clientDisconnected');
       this.dispose();
     });
@@ -99,6 +105,7 @@ export class ProxyConnection extends EventEmitter {
 
     serverSocket.on('close', () => {
       console.log('[Proxy] Server disconnected');
+      this.disconnectReason = 'server';
       this.emit('serverDisconnected');
       // Don't dispose during redirect — client will reconnect to proxy
       if (this.connectionState.phase !== ConnectionPhase.REDIRECTING) {
@@ -126,6 +133,11 @@ export class ProxyConnection extends EventEmitter {
     this.emit('disposed');
   }
 
+  /** Register a transformer that modifies server->client packets before forwarding. */
+  registerServerTransformer(opCode: number, fn: (data: Uint8Array) => Uint8Array): void {
+    this.serverPacketTransformers.set(opCode, fn);
+  }
+
   /** Inject a packet as if the client sent it. Used by merchant engine. */
   injectClientPacket(opCode: number, payload: Uint8Array): void {
     if (!this.serverSocket?.writable || this.disposed) return;
@@ -133,7 +145,15 @@ export class ProxyConnection extends EventEmitter {
     let data: Uint8Array;
     if (this.clientEncryptor.shouldEncrypt(opCode)) {
       const seq = this.nextClientSequence();
+      if (opCode === ClientOpCode.Login) {
+        const keyHex = Buffer.from(this.clientEncryptor.key).toString('hex');
+        console.log(`[Inject Login] payload=${payload.length}b, seq=${seq}, seed=${this.clientEncryptor.seed}, key=${keyHex}, keySalts=${this.clientEncryptor.keySalts}, phase=${this.connectionState.phase}`);
+      }
       data = this.clientEncryptor.encrypt(payload, opCode, seq);
+      if (opCode === ClientOpCode.Login) {
+        const encHex = Array.from(data).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        console.log(`[Inject Login] encrypted=${data.length}b: ${encHex}`);
+      }
     } else {
       data = payload;
     }
@@ -189,6 +209,12 @@ export class ProxyConnection extends EventEmitter {
       }
 
       // Handle special packets
+      if (opCode === ClientOpCode.Login) {
+        this.handleLoginCapture(decrypted);
+        // Debug: log the re-encrypted Login for comparison with injected Login
+        const keyHex = Buffer.from(this.clientEncryptor.key).toString('hex');
+        console.log(`[Manual Login] decrypted=${decrypted.length}b, nextSeq=${this.clientSequence}, seed=${this.clientEncryptor.seed}, key=${keyHex}, keySalts=${this.clientEncryptor.keySalts}`);
+      }
       if (opCode === ClientOpCode.ClientRedirected) {
         this.handleClientAuth(decrypted);
       }
@@ -279,13 +305,20 @@ export class ProxyConnection extends EventEmitter {
       // Emit for inspection
       this.emit('packet', 'server', opCode, decrypted);
 
+      // Apply transformer if registered (e.g. merchant name display)
+      let payload = decrypted;
+      const transformer = this.serverPacketTransformers.get(opCode);
+      if (transformer) {
+        try { payload = transformer(decrypted); } catch { /* use original on error */ }
+      }
+
       // Re-encrypt and forward to client
       if (ServerCrypto.isEncrypted(opCode)) {
         const seq = this.nextServerSequence();
-        const reEncrypted = this.serverEncryptor.encrypt(decrypted, opCode, seq);
+        const reEncrypted = this.serverEncryptor.encrypt(payload, opCode, seq);
         this.writeFrame(this.clientSocket, opCode, reEncrypted);
       } else {
-        this.writeFrame(this.clientSocket, opCode, decrypted);
+        this.writeFrame(this.clientSocket, opCode, payload);
       }
 
       this.serverBuffer = this.serverBuffer.subarray(totalLength);
@@ -310,6 +343,25 @@ export class ProxyConnection extends EventEmitter {
       console.log(`[Interceptor] Crypto initialized: seed=${seed}, keyLen=${keyLength}`);
     } catch (err) {
       console.error('[Interceptor] Failed to parse ConnectionInfo:', err);
+    }
+  }
+
+  /** Parse Login (0x03) to capture username/password for auto-reconnect */
+  private handleLoginCapture(data: Buffer | Uint8Array): void {
+    try {
+      let offset = 0;
+      const usernameLength = data[offset++];
+      const username = Buffer.from(data.subarray(offset, offset + usernameLength)).toString('ascii');
+      offset += usernameLength;
+      const passwordLength = data[offset++];
+      const password = Buffer.from(data.subarray(offset, offset + passwordLength)).toString('ascii');
+
+      this.connectionState.username = username;
+      this.connectionState.password = password;
+      this.emit('credentials', { username, password });
+      console.log(`[Interceptor] Captured login credentials for: ${username}`);
+    } catch (err) {
+      console.error('[Interceptor] Failed to parse Login packet:', err);
     }
   }
 

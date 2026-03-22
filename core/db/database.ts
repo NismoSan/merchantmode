@@ -367,7 +367,7 @@ export function enqueueAeSync(operation: string, localListingId: string, payload
   getDb().prepare('INSERT INTO ae_sync_queue (operation, local_listing_id, payload) VALUES (?, ?, ?)').run(operation, localListingId, payload);
 }
 
-export function getAeSyncQueue(): { id: number; operation: string; localListingId: string; payload: string; attempts: number }[] {
+export function getAeSyncQueue(): { id: number; operation: string; localListingId: string; payload: string; attempts: number; lastAttempt: string | null }[] {
   const rows = getDb().prepare('SELECT * FROM ae_sync_queue WHERE attempts < 3 ORDER BY created_at ASC').all() as any[];
   return rows.map(r => ({
     id: r.id,
@@ -375,6 +375,7 @@ export function getAeSyncQueue(): { id: number; operation: string; localListingI
     localListingId: r.local_listing_id,
     payload: r.payload,
     attempts: r.attempts,
+    lastAttempt: r.last_attempt || null,
   }));
 }
 

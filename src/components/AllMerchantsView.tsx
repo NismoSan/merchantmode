@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MapPin, ShoppingBag, Tag, ArrowLeftRight, Users, User, ExternalLink } from 'lucide-react';
+import { MapPin, ShoppingBag, Tag, ArrowLeftRight, Users, User } from 'lucide-react';
 import { getSpriteDataUrl, getAvatarData, type AvatarData } from '../lib/ae-api';
 
 interface Props {
@@ -195,28 +195,30 @@ function MerchantCard({ merchant, onViewProfile }: { merchant: GlobalMerchantDat
       )}
 
       {/* View Profile */}
-      <button
-        onClick={() => window.merchantMode?.shell.openExternal(`https://aislingexchange.com/players/${encodeURIComponent(merchant.name)}`)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          marginTop: 12,
-          fontSize: 11,
-          fontWeight: 600,
-          color: 'var(--color-gold-400)',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          padding: 0,
-          transition: 'opacity 200ms ease',
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.7'; }}
-        onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
-      >
-        <ExternalLink size={11} />
-        View Profile
-      </button>
+      {onViewProfile && (
+        <button
+          onClick={() => onViewProfile(merchant.name)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            marginTop: 12,
+            fontSize: 11,
+            fontWeight: 600,
+            color: 'var(--color-gold-400)',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: 0,
+            transition: 'opacity 200ms ease',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.7'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+        >
+          <User size={11} />
+          View Profile
+        </button>
+      )}
     </div>
   );
 }
